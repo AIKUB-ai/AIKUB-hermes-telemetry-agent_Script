@@ -4,13 +4,11 @@
 .env.*
 !.env.example
 
-# Python
-__pycache__/
-*.py[cod]
-.venv/
-venv/
+# OS/editor
+.DS_Store
+.idea/
+.vscode/
 
 # Local outputs
 *.log
-dist/
-build/
+/tmp/

@@ -1,49 +1,63 @@
-# AIKUB Hermes Telemetry Agent
+# AIKUB Hermes Telemetry Agent Script
 
-Reusable script that lets each Hermes bot document how its local machine/agent works into **Aikub Telemetry**.
+Ce repo contient le **script d'instructions** que les bots Hermes/Aikub lisent quand leur cron de self-logging est actif.
 
-## V1 scope
+Ce n'est pas un tutoriel pour installer le logging. Ce n'est pas un script qui demande au bot de recevoir toutes ses infos en `.env`.
 
-This first step sends one `bot_inventory_snapshot` event with:
+Le but : donner au bot la marche à suivre pour documenter dans **Aikub Telemetry** ce que Hermes sait déjà localement.
 
-| Section | How it is discovered |
+## Étape 1
+
+Fichier principal :
+
+```text
+telemetry_cron_script.md
+```
+
+À cette étape, le bot doit logger seulement :
+
+| Donnée | Source |
 |---|---|
-| Identity | from `AIKUB_TELEMETRY_BOT_ID` plus local runtime detection |
-| Model | from `~/.hermes/config.yaml` |
-| Skills | from Hermes' own skill inventory helper, fallback to local `SKILL.md` files |
+| identité | les 4 variables `.env` + runtime local |
+| modèle d'intelligence | config Hermes locale |
+| skills disponibles | inventaire Hermes local |
 
-Later steps can add machine specs, crons, plugins/tools, sessions, logs, files, etc.
+Rien d'autre.
 
-## Bot `.env` contract
-
-Each bot receives only these four values:
+## Les 4 seules variables `.env`
 
 ```env
-AIKUB_TELEMETRY_BASE_URL=https://aikubtelemetry-production.up.railway.app
-AIKUB_TELEMETRY_BOT_ID=your-bot-slug
-AIKUB_TELEMETRY_SOURCE=your-bot-source
-AIKUB_TELEMETRY_API_KEY=replace-with-bot-write-key
+AIKUB_TELEMETRY_BASE_URL=...
+AIKUB_TELEMETRY_BOT_ID=...
+AIKUB_TELEMETRY_SOURCE=...
+AIKUB_TELEMETRY_API_KEY=...
 ```
 
-No model, display name, skills, plugin list, or machine inventory is manually passed through env. The bot discovers those locally.
+Les bots ne doivent pas recevoir le modèle, les skills ou le display name en `.env`. Ils doivent les découvrir eux-mêmes localement.
 
-## Usage
+## Event envoyé
 
-Dry-run, no API write:
-
-```bash
-python3 aikub_telemetry_logger.py --dry-run
+```text
+bot_inventory_snapshot
 ```
 
-Send to Aikub Telemetry:
+Via :
 
-```bash
-python3 aikub_telemetry_logger.py
+```text
+POST <AIKUB_TELEMETRY_BASE_URL>/v1/telemetry/events
 ```
 
-## Security rules
+Avec :
 
-- Never commit real `.env` files.
-- Never print the API key. Dry-run output redacts it.
-- Bots write only through the Aikub Telemetry API.
-- Bots never connect directly to the database.
+```http
+content-type: application/json
+x-api-key: <AIKUB_TELEMETRY_API_KEY>
+x-aikub-bot-id: <AIKUB_TELEMETRY_BOT_ID>
+```
+
+## Sécurité
+
+- Aucun secret dans le repo.
+- Aucun `.env` réel dans le repo.
+- Le bot n'écrit jamais directement dans la DB.
+- Le bot écrit seulement via l'API Aikub Telemetry.
