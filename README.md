@@ -4,15 +4,15 @@ Ce repo contient le **script d'instructions** que les bots Hermes/Aikub lisent q
 
 Ce n'est pas un tutoriel pour installer le logging. Ce n'est pas un script qui demande au bot de recevoir toutes ses infos en `.env`.
 
-Le but : donner au bot la marche à suivre pour documenter dans **Aikub Telemetry** ce que Hermes sait déjà localement.
+Le but : donner au bot la marche à suivre pour documenter dans **AIKUB_Telemetry** ce que Hermes sait déjà localement.
 
-## Étape 1
-
-Fichier principal :
+## Fichier principal
 
 ```text
 telemetry_cron_script.md
 ```
+
+## Étape figée maintenant
 
 À cette étape, le bot doit logger seulement :
 
@@ -21,8 +21,8 @@ telemetry_cron_script.md
 | identité | les 4 variables `.env` + runtime local |
 | modèle d'intelligence | config Hermes locale |
 | skills disponibles | inventaire Hermes local |
-
-Rien d'autre.
+| crons | `~/.hermes/cron/jobs.json`, sanitized |
+| files | metadata safe seulement |
 
 ## Les 4 seules variables `.env`
 
@@ -33,7 +33,46 @@ AIKUB_TELEMETRY_SOURCE=...
 AIKUB_TELEMETRY_API_KEY=...
 ```
 
-Les bots ne doivent pas recevoir le modèle, les skills ou le display name en `.env`. Ils doivent les découvrir eux-mêmes localement.
+Les bots ne doivent pas recevoir le modèle, les skills, le display name, les crons ou les fichiers en `.env`. Ils doivent les découvrir eux-mêmes localement.
+
+## Contrat JSON AIKUB_Telemetry
+
+L'API accepte seulement ces champs à la racine :
+
+```text
+botId, eventType, severity, source, traceId, sessionId, payload, occurredAt
+```
+
+Donc l'inventaire doit être sous `payload` :
+
+```json
+{
+  "botId": "chopchop",
+  "eventType": "bot_inventory_snapshot",
+  "severity": "INFO",
+  "source": "chopchop",
+  "occurredAt": "<date-utc>",
+  "payload": {
+    "identity": {},
+    "model": {},
+    "skillCount": 0,
+    "skills": [],
+    "crons": {
+      "cronCount": 0,
+      "cronNames": [],
+      "items": []
+    },
+    "fileInventory": {
+      "fileCount": 0,
+      "returnedCount": 0,
+      "skippedCount": 0,
+      "roots": [],
+      "byExtension": {},
+      "items": []
+    }
+  }
+}
+```
 
 ## Event envoyé
 
@@ -60,4 +99,8 @@ x-aikub-bot-id: <AIKUB_TELEMETRY_BOT_ID>
 - Aucun secret dans le repo.
 - Aucun `.env` réel dans le repo.
 - Le bot n'écrit jamais directement dans la DB.
-- Le bot écrit seulement via l'API Aikub Telemetry.
+- Le bot écrit seulement via l'API AIKUB_Telemetry.
+- Aucun contenu de fichier.
+- Aucun prompt complet de cron.
+- Aucun chat/session complet.
+- Aucun token, clé API, credential, cookie, password.
