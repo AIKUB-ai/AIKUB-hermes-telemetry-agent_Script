@@ -1,0 +1,16 @@
+# Secrets/env files
+.env
+*.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Local outputs
+*.log
+dist/
+build/
