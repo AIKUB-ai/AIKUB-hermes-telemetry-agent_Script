@@ -22,6 +22,7 @@ telemetry_cron_script.md
 | modèle d'intelligence | config Hermes locale |
 | skills disponibles | inventaire Hermes local |
 | crons | `~/.hermes/cron/jobs.json`, sanitized |
+| plugins enabled | plugins actifs/visibles dans Hermes Dashboard |
 
 ## Les 4 seules variables `.env`
 
@@ -35,6 +36,8 @@ AIKUB_TELEMETRY_API_KEY=...
 Les bots ne doivent pas recevoir le modèle, les skills, le display name ou les crons en `.env`. Ils doivent les découvrir eux-mêmes localement.
 
 Les bots ne doivent plus scanner ni envoyer l'inventaire des fichiers (`fileInventory`) : trop lourd et inutile pour l'ERP à cette étape.
+
+Les bots doivent documenter seulement les plugins Hermes **enabled/actifs**. Ils ne doivent pas envoyer le catalogue complet des plugins bundled/not enabled.
 
 ## Contrat JSON AIKUB_Telemetry
 
@@ -61,6 +64,11 @@ Donc l'inventaire doit être sous `payload` :
     "crons": {
       "cronCount": 0,
       "cronNames": [],
+      "items": []
+    },
+    "plugins": {
+      "enabledCount": 0,
+      "pluginCount": 0,
       "items": []
     }
   }
@@ -95,6 +103,7 @@ x-aikub-bot-id: <AIKUB_TELEMETRY_BOT_ID>
 - Le bot écrit seulement via l'API AIKUB_Telemetry.
 - Aucun inventaire de fichiers (`fileInventory`).
 - Aucun contenu de fichier.
+- Aucun plugin not enabled/inactif.
 - Aucun prompt complet de cron.
 - Aucun chat/session complet.
 - Aucun token, clé API, credential, cookie, password.

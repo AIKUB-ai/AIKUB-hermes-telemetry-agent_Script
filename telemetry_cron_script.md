@@ -2,7 +2,7 @@
 
 Tu es un bot Hermes/Aikub. Ce fichier est le script d'instructions que tu lis à chaque fois que ton cron de self-logging est actif.
 
-Objectif de l'étape figée : documenter dans AIKUB_Telemetry ton inventaire de base : identité, modèle d'intelligence, skills disponibles et crons.
+Objectif de l'étape figée : documenter dans AIKUB_Telemetry ton inventaire de base : identité, modèle d'intelligence, skills disponibles, crons et plugins enabled.
 
 Ne log rien d'autre pour l'instant.
 
@@ -40,7 +40,7 @@ Donc toutes les données découvertes doivent être dans `payload`.
 Ne mets jamais à la racine :
 
 ```text
-identity, model, skills, skillCount, crons, cronCount
+identity, model, skills, skillCount, crons, cronCount, plugins, pluginCount, enabledCount
 ```
 
 ## 3. Documente ton identité
@@ -202,7 +202,50 @@ Format attendu dans `payload` :
 }
 ```
 
-## 7. Ne log pas l'inventaire de fichiers
+## 7. Documente tes plugins enabled
+
+Tu dois logger seulement les plugins Hermes actifs/enabled, c'est-à-dire ceux qui sont réellement visibles/chargés dans Hermes Dashboard.
+
+Source acceptée :
+
+1. API locale du Hermes Dashboard ou inventaire local équivalent qui retourne les plugins actifs/visibles.
+2. Fallback : seulement les plugins explicitement marqués `enabled: true` ou `status: active` par Hermes.
+
+Tu ne dois pas logger le catalogue complet des plugins bundled/not enabled. Un plugin documenté dans Hermes, mais non activé dans le dashboard, doit être exclu.
+
+Pour chaque plugin enabled, log au minimum :
+
+```json
+{
+  "name": "<plugin-name>",
+  "label": "<label-ou-name>",
+  "version": "<version-ou-null>",
+  "source": "<source-ou-null>",
+  "enabled": true,
+  "status": "active",
+  "description": "<description-safe-ou-null>",
+  "dashboardTab": "<path-ou-null>",
+  "hasApi": true
+}
+```
+
+Format attendu dans `payload` :
+
+```json
+{
+  "plugins": {
+    "enabledCount": <nombre_de_plugins_enabled>,
+    "pluginCount": <nombre_de_plugins_enabled>,
+    "source": "hermes_dashboard_plugins_api",
+    "includesInactiveBundledPlugins": false,
+    "items": []
+  }
+}
+```
+
+Règle importante : `pluginCount` doit compter seulement les plugins enabled envoyés, pas les plugins not enabled disponibles dans le catalogue Hermes.
+
+## 8. Ne log pas l'inventaire de fichiers
 
 Le bot ne doit plus scanner ni envoyer `fileInventory`.
 
@@ -214,7 +257,7 @@ Tu ne dois pas envoyer :
 fileInventory, fileCount, returnedCount, skippedCount, byExtension, items de fichiers
 ```
 
-## 8. Envoie un seul event à AIKUB_Telemetry
+## 9. Envoie un seul event à AIKUB_Telemetry
 
 Endpoint :
 
@@ -263,12 +306,19 @@ Format complet attendu :
       "cronCount": <nombre_total_de_crons>,
       "cronNames": [],
       "items": []
+    },
+    "plugins": {
+      "enabledCount": <nombre_de_plugins_enabled>,
+      "pluginCount": <nombre_de_plugins_enabled>,
+      "source": "hermes_dashboard_plugins_api",
+      "includesInactiveBundledPlugins": false,
+      "items": []
     }
   }
 }
 ```
 
-## 9. Limite stricte de cette étape
+## 10. Limite stricte de cette étape
 
 Pour cette version, ne log pas encore :
 
@@ -276,7 +326,6 @@ Pour cette version, ne log pas encore :
 - sessions
 - messages
 - logs complets
-- plugins
 - tools
 - users
 - secrets
@@ -285,13 +334,14 @@ Pour cette version, ne log pas encore :
 - clés API
 - données client
 - inventaire de fichiers
+- plugins not enabled/inactifs
 - contenu de fichier
 - prompt complet de cron
 - session/chat complet
 
 On ajoute ces sections plus tard, une étape à la fois.
 
-## 10. Résumé de ce que tu dois faire
+## 11. Résumé de ce que tu dois faire
 
 À chaque cron actif :
 
@@ -300,7 +350,8 @@ On ajoute ces sections plus tard, une étape à la fois.
 3. Découvrir localement ton modèle Hermes.
 4. Découvrir localement tes skills Hermes.
 5. Découvrir localement tes crons Hermes en version safe.
-6. Construire un JSON avec seulement les champs racine acceptés par AIKUB_Telemetry.
-7. Mettre tout l'inventaire dans `payload`.
-8. Envoyer un seul `bot_inventory_snapshot` à AIKUB_Telemetry.
-9. Ne rien logger d'autre.
+6. Découvrir localement seulement tes plugins Hermes enabled/actifs.
+7. Construire un JSON avec seulement les champs racine acceptés par AIKUB_Telemetry.
+8. Mettre tout l'inventaire dans `payload`.
+9. Envoyer un seul `bot_inventory_snapshot` à AIKUB_Telemetry.
+10. Ne rien logger d'autre.
