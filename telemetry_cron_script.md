@@ -2,7 +2,7 @@
 
 Tu es un bot Hermes/Aikub. Ce fichier est le script d'instructions que tu lis à chaque fois que ton cron de self-logging est actif.
 
-Objectif de l'étape figée : documenter dans AIKUB_Telemetry ton inventaire de base : identité, modèle d'intelligence, skills disponibles, crons, et inventaire de fichiers safe.
+Objectif de l'étape figée : documenter dans AIKUB_Telemetry ton inventaire de base : identité, modèle d'intelligence, skills disponibles et crons.
 
 Ne log rien d'autre pour l'instant.
 
@@ -40,7 +40,7 @@ Donc toutes les données découvertes doivent être dans `payload`.
 Ne mets jamais à la racine :
 
 ```text
-identity, model, skills, skillCount, crons, cronCount, fileInventory
+identity, model, skills, skillCount, crons, cronCount
 ```
 
 ## 3. Documente ton identité
@@ -202,65 +202,16 @@ Format attendu dans `payload` :
 }
 ```
 
-## 7. Documente ton inventaire de fichiers safe
+## 7. Ne log pas l'inventaire de fichiers
 
-Tu dois logger seulement des métadonnées de fichiers. Jamais le contenu.
+Le bot ne doit plus scanner ni envoyer `fileInventory`.
 
-Sources safe à scanner pour cette étape :
+Raison : l'inventaire de fichiers devient rapidement trop lourd pour l'ERP et n'apporte pas assez de valeur opérationnelle dans BotOps à cette étape.
+
+Tu ne dois pas envoyer :
 
 ```text
-~/.hermes/scripts
-~/.hermes/skills
-~/.hermes/cron
-```
-
-Pour chaque fichier retourné, log seulement :
-
-- path relatif
-- nom
-- extension
-- sizeBytes
-- modifiedAt
-
-Tu dois exclure :
-
-- `.env`
-- secrets
-- tokens
-- credentials
-- passwords
-- keys
-- cookies
-- sessions
-- cache sensible
-- outputs cron complets
-- fichiers trop gros
-- contenu de fichiers
-
-Format attendu dans `payload` :
-
-```json
-{
-  "fileInventory": {
-    "fileCount": <nombre_total_safe>,
-    "returnedCount": <nombre_retourne>,
-    "skippedCount": <nombre_exclu>,
-    "roots": ["scripts", "skills", "cron"],
-    "byExtension": {
-      ".md": 363,
-      ".py": 36
-    },
-    "items": [
-      {
-        "path": "scripts/example.py",
-        "name": "example.py",
-        "extension": ".py",
-        "sizeBytes": 1234,
-        "modifiedAt": "<date-utc>"
-      }
-    ]
-  }
-}
+fileInventory, fileCount, returnedCount, skippedCount, byExtension, items de fichiers
 ```
 
 ## 8. Envoie un seul event à AIKUB_Telemetry
@@ -312,14 +263,6 @@ Format complet attendu :
       "cronCount": <nombre_total_de_crons>,
       "cronNames": [],
       "items": []
-    },
-    "fileInventory": {
-      "fileCount": <nombre_total_safe>,
-      "returnedCount": <nombre_retourne>,
-      "skippedCount": <nombre_exclu>,
-      "roots": [],
-      "byExtension": {},
-      "items": []
     }
   }
 }
@@ -341,6 +284,7 @@ Pour cette version, ne log pas encore :
 - tokens
 - clés API
 - données client
+- inventaire de fichiers
 - contenu de fichier
 - prompt complet de cron
 - session/chat complet
@@ -356,8 +300,7 @@ On ajoute ces sections plus tard, une étape à la fois.
 3. Découvrir localement ton modèle Hermes.
 4. Découvrir localement tes skills Hermes.
 5. Découvrir localement tes crons Hermes en version safe.
-6. Découvrir localement tes fichiers en metadata seulement.
-7. Construire un JSON avec seulement les champs racine acceptés par AIKUB_Telemetry.
-8. Mettre tout l'inventaire dans `payload`.
-9. Envoyer un seul `bot_inventory_snapshot` à AIKUB_Telemetry.
-10. Ne rien logger d'autre.
+6. Construire un JSON avec seulement les champs racine acceptés par AIKUB_Telemetry.
+7. Mettre tout l'inventaire dans `payload`.
+8. Envoyer un seul `bot_inventory_snapshot` à AIKUB_Telemetry.
+9. Ne rien logger d'autre.
