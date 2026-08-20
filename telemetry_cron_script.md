@@ -1,8 +1,11 @@
-# AIKUB Telemetry Cron Script - Étape 1
+# AIKUB Telemetry Cron Script - Étapes 1 et 2
 
 Tu es un bot Hermes/Aikub. Ce fichier est le script d'instructions que tu lis à chaque fois que ton cron de self-logging est actif.
 
-Objectif de l'étape figée : documenter dans AIKUB_Telemetry ton inventaire de base : identité, modèle d'intelligence, skills disponibles, crons et plugins enabled.
+Objectif des étapes figées :
+
+1. documenter dans AIKUB_Telemetry ton inventaire de base : identité, modèle d'intelligence, skills disponibles, crons et plugins enabled;
+2. envoyer les nouvelles lignes de `~/.hermes/logs/agent.log` pour alimenter la section logs du ERP.
 
 Ne log rien d'autre pour l'instant.
 
@@ -325,7 +328,6 @@ Pour cette version, ne log pas encore :
 - specs machine détaillées
 - sessions
 - messages
-- logs complets
 - tools
 - users
 - secrets
@@ -339,11 +341,13 @@ Pour cette version, ne log pas encore :
 - prompt complet de cron
 - session/chat complet
 
+Seule exception figée à cette étape : `~/.hermes/logs/agent.log` peut être envoyé via la section logs incrémentale décrite plus bas, avec redaction et sans transformation du champ `raw`.
+
 On ajoute ces sections plus tard, une étape à la fois.
 
-## 11. Résumé de ce que tu dois faire
+## 11. Résumé de ce que tu dois faire - inventaire
 
-À chaque cron actif :
+À chaque cron actif pour la section inventaire :
 
 1. Lire les 4 variables `.env`.
 2. Découvrir localement ton identité Hermes.
@@ -354,4 +358,54 @@ On ajoute ces sections plus tard, une étape à la fois.
 7. Construire un JSON avec seulement les champs racine acceptés par AIKUB_Telemetry.
 8. Mettre tout l'inventaire dans `payload`.
 9. Envoyer un seul `bot_inventory_snapshot` à AIKUB_Telemetry.
-10. Ne rien logger d'autre.
+10. Ne rien logger d'autre dans l'event d'inventaire.
+
+## 12. Section logs figée
+
+Script gelé :
+
+```text
+scripts/aikub_telemetry_logs_incremental.py
+```
+
+Source locale :
+
+```text
+~/.hermes/logs/agent.log
+```
+
+Le script doit envoyer seulement les nouvelles lignes depuis le dernier envoi grâce à un curseur local :
+
+```text
+~/.hermes/aikub_telemetry_state/logs_agent_log.json
+```
+
+Le payload logs doit être sous :
+
+```text
+payload.logs
+```
+
+Le ERP doit afficher exactement :
+
+```text
+payload.logs.items[].raw
+```
+
+Les champs parsés servent seulement au rendu :
+
+```text
+level, component, timestamp, line, isContinuation, parentLine, parentLevel, parentComponent
+```
+
+Règle importante côté ERP : quand un nouveau batch arrive, ne jamais supprimer les anciennes lignes. Ajouter les nouvelles lignes et dédupliquer avec :
+
+```text
+botId + logName + line
+```
+
+Les détails complets du contrat logs sont dans :
+
+```text
+docs/logs_contract.md
+```

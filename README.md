@@ -6,15 +6,20 @@ Ce n'est pas un tutoriel pour installer le logging. Ce n'est pas un script qui d
 
 Le but : donner au bot la marche à suivre pour documenter dans **AIKUB_Telemetry** ce que Hermes sait déjà localement.
 
-## Fichier principal
+## Fichiers principaux
 
 ```text
 telemetry_cron_script.md
+scripts/aikub_telemetry_logger.py
+scripts/aikub_telemetry_logs_incremental.py
+docs/logs_contract.md
 ```
 
-## Étape figée maintenant
+## Étapes figées maintenant
 
-À cette étape, le bot doit logger seulement :
+### Étape 1 — inventaire bot
+
+Le bot documente :
 
 | Donnée | Source |
 |---|---|
@@ -23,6 +28,24 @@ telemetry_cron_script.md
 | skills disponibles | inventaire Hermes local |
 | crons | `~/.hermes/cron/jobs.json`, sanitized |
 | plugins enabled | plugins actifs/visibles dans Hermes Dashboard |
+
+### Étape 2 — logs Hermes
+
+Le bot envoie les nouvelles lignes de :
+
+```text
+~/.hermes/logs/agent.log
+```
+
+Le script est incrémental : il garde un curseur local et envoie seulement les nouvelles lignes depuis le dernier envoi. Le ERP doit donc **append/dédupliquer** les lignes reçues et ne jamais supprimer les anciennes quand un nouveau batch arrive.
+
+Le rendu ERP doit afficher exactement :
+
+```text
+payload.logs.items[].raw
+```
+
+Les champs parsés comme `level`, `line`, `component`, `isContinuation` servent seulement aux filtres, couleurs, tri et déduplication.
 
 ## Les 4 seules variables `.env`
 
