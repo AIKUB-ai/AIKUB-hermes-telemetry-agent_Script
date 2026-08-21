@@ -5,7 +5,8 @@ Tu es un bot Hermes/Aikub. Ce fichier est le script d'instructions que tu lis à
 Objectif des étapes figées :
 
 1. documenter dans AIKUB_Telemetry ton inventaire de base : identité, modèle d'intelligence, skills disponibles, crons et plugins enabled;
-2. envoyer les nouvelles lignes de `~/.hermes/logs/agent.log` pour alimenter la section logs du ERP.
+2. envoyer les nouvelles lignes de `~/.hermes/logs/agent.log` pour alimenter la section logs du ERP;
+3. envoyer les sessions/messages utiles de `~/.hermes/state.db` pour alimenter la section sessions du ERP.
 
 Ne log rien d'autre pour l'instant.
 
@@ -321,29 +322,27 @@ Format complet attendu :
 }
 ```
 
-## 10. Limite stricte de cette étape
+## 10. Limites strictes
 
-Pour cette version, ne log pas encore :
+Ne log pas :
 
 - specs machine détaillées
-- sessions
-- messages
-- tools
 - users
 - secrets
 - variables `.env` complètes
 - tokens
 - clés API
-- données client
+- données client hors messages Hermes explicitement envoyés
 - inventaire de fichiers
 - plugins not enabled/inactifs
-- contenu de fichier
+- contenu de fichier arbitraire
 - prompt complet de cron
-- session/chat complet
+- messages vides, inactive ou compacted dans la section sessions
 
-Seule exception figée à cette étape : `~/.hermes/logs/agent.log` peut être envoyé via la section logs incrémentale décrite plus bas, avec redaction et sans transformation du champ `raw`.
+Exceptions figées :
 
-On ajoute ces sections plus tard, une étape à la fois.
+- `~/.hermes/logs/agent.log` peut être envoyé via la section logs incrémentale, avec redaction et affichage `raw` inchangé.
+- `~/.hermes/state.db` peut être lu pour envoyer `bot_sessions_snapshot`, mais seulement les sessions avec messages actifs non vides et les messages actifs non vides, avec redaction et chunking.
 
 ## 11. Résumé de ce que tu dois faire - inventaire
 
@@ -408,4 +407,55 @@ Les détails complets du contrat logs sont dans :
 
 ```text
 docs/logs_contract.md
+```
+
+## 13. Section sessions figée
+
+Script gelé :
+
+```text
+scripts/aikub_telemetry_sessions_snapshot.py
+```
+
+Source locale :
+
+```text
+~/.hermes/state.db
+```
+
+Event :
+
+```text
+bot_sessions_snapshot
+```
+
+Recette ERP validée :
+
+```text
+- sessions avec au moins 1 message actif non vide
+- messages active=1 avec content non vide
+- exclusion des sessions à 0 message
+- exclusion des messages vides, inactive et compacted
+- redaction des secrets
+- suppression des caractères invalides comme NUL
+- chunking par défaut: 100 messages par POST
+```
+
+Le ERP doit regrouper tous les chunks par :
+
+```text
+payload.sessions.batchId
+```
+
+Et dédupliquer avec :
+
+```text
+sessions: botId + sessionId
+messages: botId + sessionId + messageId
+```
+
+Les détails complets du contrat sessions sont dans :
+
+```text
+docs/sessions_contract.md
 ```

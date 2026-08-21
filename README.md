@@ -12,7 +12,9 @@ Le but : donner au bot la marche à suivre pour documenter dans **AIKUB_Telemetr
 telemetry_cron_script.md
 scripts/aikub_telemetry_logger.py
 scripts/aikub_telemetry_logs_incremental.py
+scripts/aikub_telemetry_sessions_snapshot.py
 docs/logs_contract.md
+docs/sessions_contract.md
 ```
 
 ## Étapes figées maintenant
@@ -46,6 +48,38 @@ payload.logs.items[].raw
 ```
 
 Les champs parsés comme `level`, `line`, `component`, `isContinuation` servent seulement aux filtres, couleurs, tri et déduplication.
+
+### Étape 3 — sessions Hermes
+
+Le bot envoie les sessions/messages utiles depuis :
+
+```text
+~/.hermes/state.db
+```
+
+Recette figée pour le ERP :
+
+```text
+- eventType: bot_sessions_snapshot
+- sessions avec au moins 1 message actif non vide
+- messages active=1 avec content non vide
+- pas les sessions à 0 message
+- pas les messages compacted/inactive
+- transport en chunks si nécessaire
+```
+
+Le ERP doit regrouper les chunks par :
+
+```text
+payload.sessions.batchId
+```
+
+Et dédupliquer :
+
+```text
+sessions: botId + sessionId
+messages: botId + sessionId + messageId
+```
 
 ## Les 4 seules variables `.env`
 
@@ -128,5 +162,5 @@ x-aikub-bot-id: <AIKUB_TELEMETRY_BOT_ID>
 - Aucun contenu de fichier.
 - Aucun plugin not enabled/inactif.
 - Aucun prompt complet de cron.
-- Aucun chat/session complet.
+- Sessions/messages envoyés seulement via le contrat `bot_sessions_snapshot`, sanitized/redacted, actifs et non vides.
 - Aucun token, clé API, credential, cookie, password.
