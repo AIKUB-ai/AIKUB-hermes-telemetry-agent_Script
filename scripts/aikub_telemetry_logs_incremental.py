@@ -21,7 +21,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-LOGGER_PATH = Path("/home/chopchop/aikub_telemetry_logger.py")
+LOGGER_PATH = Path(__file__).with_name("aikub_telemetry_logger.py")
 HERMES_HOME = Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes"))).expanduser()
 LOG_PATH = HERMES_HOME / "logs" / "agent.log"
 STATE_PATH = HERMES_HOME / "aikub_telemetry_state" / "logs_agent_log.json"
@@ -189,18 +189,19 @@ def collect_lines(first_run_days: int, baseline_line: int | None = None) -> tupl
 def send(entries: list[dict[str, Any]], state: dict[str, Any], chunk_size: int, dry_run: bool) -> dict[str, Any]:
     base = load_base_logger()
     home = HERMES_HOME
-    base_payload = base.build_payload(base.require_env("AIKUB_TELEMETRY_BOT_ID"), home)
+    base_payload = base.build_payload(base.optional_env("AIKUB_TELEMETRY_BOT_ID", "unknown"), home)
     endpoint = base.build_endpoint(base.require_env("AIKUB_TELEMETRY_BASE_URL"))
-    api_key = base.require_env("AIKUB_TELEMETRY_API_KEY")
-    bot_id = base.require_env("AIKUB_TELEMETRY_BOT_ID")
-    source = base.require_env("AIKUB_TELEMETRY_SOURCE")
+    api_key = base.require_token()
+    configured_bot_id = base.optional_env("AIKUB_TELEMETRY_BOT_ID")
+    bot_id = configured_bot_id or "unknown"
+    source = base.optional_env("AIKUB_TELEMETRY_SOURCE", "hermes")
     batch_id = f"agent-log-incremental-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
 
     chunks = [entries[i:i + chunk_size] for i in range(0, len(entries), chunk_size)] or [[]]
     results = []
     for idx, chunk in enumerate(chunks, 1):
         payload = {
-            "botId": bot_id,
+            **({"botId": bot_id} if configured_bot_id else {}),
             "eventType": "bot_inventory_snapshot",
             "severity": "INFO",
             "source": source,

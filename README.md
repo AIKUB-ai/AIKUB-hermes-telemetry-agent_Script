@@ -1,10 +1,32 @@
 # AIKUB Hermes Telemetry Agent Script
 
-Ce repo contient le **script d'instructions** que les bots Hermes/Aikub lisent quand leur cron de self-logging est actif.
+Ce repo contient les scripts/runbook que chaque bot Hermes utilise pour envoyer sa telemetry vers **AIKUB_Telemetry**.
 
-Ce n'est pas un tutoriel pour installer le logging. Ce n'est pas un script qui demande au bot de recevoir toutes ses infos en `.env`.
+## Workflow actuel validé
 
-Le but : donner au bot la marche à suivre pour documenter dans **AIKUB_Telemetry** ce que Hermes sait déjà localement.
+Le bot a seulement besoin de :
+
+```env
+AIKUB_TELEMETRY_BASE_URL=https://aikubtelemetry-production.up.railway.app
+AIKUB_TELEMETRY_BOTOPS_TOKEN=<token du bot provenant de Vault>
+```
+
+Compatibilité : les scripts acceptent encore `AIKUB_TELEMETRY_API_KEY` comme alias legacy du token, pour ne pas briser les bots déjà installés. Le nom recommandé est maintenant `AIKUB_TELEMETRY_BOTOPS_TOKEN`.
+
+Le bot POST vers :
+
+```text
+<AIKUB_TELEMETRY_BASE_URL>/v1/telemetry/events
+```
+
+avec :
+
+```http
+content-type: application/json
+x-aikub-botops-token: <AIKUB_TELEMETRY_BOTOPS_TOKEN>
+```
+
+Le script **n’envoie plus** `x-api-key` ni `x-aikub-bot-id`. L’API AIKUB_Telemetry valide le token via Vault, associe le bot côté serveur, puis écrit en DB telemetry.
 
 ## Fichiers principaux
 
@@ -17,21 +39,21 @@ docs/logs_contract.md
 docs/sessions_contract.md
 ```
 
-## Étapes figées maintenant
+## Étapes envoyées par le cron
 
-### Étape 1 — inventaire bot
+### 1. Inventaire bot
 
-Le bot documente :
+Le bot documente localement :
 
 | Donnée | Source |
 |---|---|
-| identité | les 4 variables `.env` + runtime local |
+| identité | token résolu côté API + runtime local; `AIKUB_TELEMETRY_BOT_ID` optionnel si présent |
 | modèle d'intelligence | config Hermes locale |
 | skills disponibles | inventaire Hermes local |
 | crons | `~/.hermes/cron/jobs.json`, sanitized |
 | plugins enabled | plugins actifs/visibles dans Hermes Dashboard |
 
-### Étape 2 — logs Hermes
+### 2. Logs Hermes
 
 Le bot envoie les nouvelles lignes de :
 
@@ -39,7 +61,7 @@ Le bot envoie les nouvelles lignes de :
 ~/.hermes/logs/agent.log
 ```
 
-Le script est incrémental : il garde un curseur local et envoie seulement les nouvelles lignes depuis le dernier envoi. Le ERP doit donc **append/dédupliquer** les lignes reçues et ne jamais supprimer les anciennes quand un nouveau batch arrive.
+Le script est incrémental : il garde un curseur local et envoie seulement les nouvelles lignes depuis le dernier envoi. Le ERP doit append/dédupliquer les lignes reçues et ne jamais supprimer les anciennes quand un nouveau batch arrive.
 
 Le rendu ERP doit afficher exactement :
 
@@ -47,9 +69,7 @@ Le rendu ERP doit afficher exactement :
 payload.logs.items[].raw
 ```
 
-Les champs parsés comme `level`, `line`, `component`, `isContinuation` servent seulement aux filtres, couleurs, tri et déduplication.
-
-### Étape 3 — sessions Hermes
+### 3. Sessions Hermes
 
 Le bot envoie les sessions/messages utiles depuis :
 
@@ -81,37 +101,46 @@ sessions: botId + sessionId
 messages: botId + sessionId + messageId
 ```
 
-## Les 4 seules variables `.env`
+Même si le bot n’envoie plus `botId` à la racine, le backend peut utiliser l’identité bot résolue depuis le token Vault pour compléter/dédupliquer côté serveur.
+
+## Variables `.env`
+
+Requises :
 
 ```env
 AIKUB_TELEMETRY_BASE_URL=...
+AIKUB_TELEMETRY_BOTOPS_TOKEN=...
+```
+
+Optionnelles :
+
+```env
 AIKUB_TELEMETRY_BOT_ID=...
-AIKUB_TELEMETRY_SOURCE=...
-AIKUB_TELEMETRY_API_KEY=...
+AIKUB_TELEMETRY_SOURCE=hermes
+AIKUB_TELEMETRY_API_KEY=... # alias legacy du token; éviter pour les nouvelles installs
 ```
 
 Les bots ne doivent pas recevoir le modèle, les skills, le display name ou les crons en `.env`. Ils doivent les découvrir eux-mêmes localement.
 
 Les bots ne doivent plus scanner ni envoyer l'inventaire des fichiers (`fileInventory`) : trop lourd et inutile pour l'ERP à cette étape.
 
-Les bots doivent documenter seulement les plugins Hermes **enabled/actifs**. Ils ne doivent pas envoyer le catalogue complet des plugins bundled/not enabled.
-
 ## Contrat JSON AIKUB_Telemetry
 
 L'API accepte seulement ces champs à la racine :
 
 ```text
-botId, eventType, severity, source, traceId, sessionId, payload, occurredAt
+eventType, severity, source, traceId, sessionId, payload, occurredAt
 ```
 
-Donc l'inventaire doit être sous `payload` :
+`botId` est optionnel/legacy côté script. Avec le workflow Vault, l’API doit résoudre le bot à partir de `x-aikub-botops-token`.
+
+Exemple inventory :
 
 ```json
 {
-  "botId": "chopchop",
   "eventType": "bot_inventory_snapshot",
   "severity": "INFO",
-  "source": "chopchop",
+  "source": "hermes",
   "occurredAt": "<date-utc>",
   "payload": {
     "identity": {},
@@ -132,35 +161,17 @@ Donc l'inventaire doit être sous `payload` :
 }
 ```
 
-## Event envoyé
-
-```text
-bot_inventory_snapshot
-```
-
-Via :
-
-```text
-POST <AIKUB_TELEMETRY_BASE_URL>/v1/telemetry/events
-```
-
-Avec :
-
-```http
-content-type: application/json
-x-api-key: <AIKUB_TELEMETRY_API_KEY>
-x-aikub-bot-id: <AIKUB_TELEMETRY_BOT_ID>
-```
-
 ## Sécurité
 
 - Aucun secret dans le repo.
 - Aucun `.env` réel dans le repo.
-- Le bot n'écrit jamais directement dans la DB.
-- Le bot écrit seulement via l'API AIKUB_Telemetry.
+- Aucun token de bot dans les env vars du service AIKUB_Telemetry/Railway.
+- Les vrais tokens bot restent dans Vault; le bot possède seulement son propre token client.
+- Le bot écrit seulement via l’API AIKUB_Telemetry.
+- Le bot n’écrit jamais directement dans la DB.
 - Aucun inventaire de fichiers (`fileInventory`).
-- Aucun contenu de fichier.
+- Aucun contenu de fichier arbitraire.
 - Aucun plugin not enabled/inactif.
 - Aucun prompt complet de cron.
 - Sessions/messages envoyés seulement via le contrat `bot_sessions_snapshot`, sanitized/redacted, actifs et non vides.
-- Aucun token, clé API, credential, cookie, password.
+- Aucun token, clé API, credential, cookie, password dans les payloads/logs.

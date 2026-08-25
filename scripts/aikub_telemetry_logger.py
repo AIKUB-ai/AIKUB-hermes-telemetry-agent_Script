@@ -7,13 +7,16 @@ Goal:
   existing Hermes inventory into Aikub Telemetry.
 
 Required env per bot:
-  AIKUB_TELEMETRY_API_KEY=[REDACTED]
+  AIKUB_TELEMETRY_BASE_URL=https://aikubtelemetry-production.up.railway.app
+  AIKUB_TELEMETRY_BOTOPS_TOKEN=[REDACTED]
+
+Optional compatibility env:
+  AIKUB_TELEMETRY_API_KEY=[REDACTED]  # legacy alias for AIKUB_TELEMETRY_BOTOPS_TOKEN
   AIKUB_TELEMETRY_BOT_ID=<technical slug, e.g. chopchop>
   AIKUB_TELEMETRY_SOURCE=<runtime/source, e.g. hermes>
-  AIKUB_TELEMETRY_BASE_URL=https://aikubtelemetry-production.up.railway.app
 
 The script auto-discovers from the local Hermes installation/dashboard data:
-  - identity from AIKUB_TELEMETRY_BOT_ID
+  - identity from AIKUB_TELEMETRY_BOT_ID when present; otherwise API resolves bot from token
   - model from ~/.hermes/config.yaml
   - skills from ~/.hermes/skills and ~/.hermes/hermes-agent/skills
   - crons from ~/.hermes/cron/jobs.json, sanitized
@@ -279,8 +282,24 @@ def discover_plugins(home: Path) -> dict[str, Any]:
     }
 
 
+def optional_env(name: str, default: str = "") -> str:
+    value = os.getenv(name)
+    if value and value.strip():
+        return value.strip()
+    return default
+
+
+def require_token() -> str:
+    """Return the bot telemetry token. Prefer the explicit BotOps token env name; keep the
+    old API_KEY name as a compatibility alias for already-installed bots."""
+    token = optional_env("AIKUB_TELEMETRY_BOTOPS_TOKEN") or optional_env("AIKUB_TELEMETRY_API_KEY")
+    if not token:
+        raise SystemExit("Missing required env: AIKUB_TELEMETRY_BOTOPS_TOKEN")
+    return token
+
+
 def build_payload(bot_id: str, home: Path) -> dict[str, Any]:
-    source = require_env("AIKUB_TELEMETRY_SOURCE")
+    source = optional_env("AIKUB_TELEMETRY_SOURCE", "hermes")
     runtime = detect_runtime(home)
     skills = discover_skills(home)
     crons = discover_crons(home)
@@ -333,12 +352,11 @@ def post_event(endpoint: str, api_key: str, bot_id: str, payload: dict[str, Any]
         method="POST",
         headers={
             "content-type": "application/json",
-            "x-api-key": api_key,
-            "x-aikub-bot-id": bot_id,
+            "x-aikub-botops-token": api_key,
         },
     )
     try:
-        with urllib.request.urlopen(request, timeout=20) as response:
+        with urllib.request.urlopen(request, timeout=120) as response:
             response_body = response.read().decode("utf-8", errors="replace")
             return {
                 "ok": 200 <= response.status < 300,
@@ -354,6 +372,8 @@ def post_event(endpoint: str, api_key: str, bot_id: str, payload: dict[str, Any]
         return {"ok": False, "status": exc.code, "body": parsed_body}
     except urllib.error.URLError as exc:
         return {"ok": False, "status": None, "body": str(exc)}
+    except TimeoutError as exc:
+        return {"ok": False, "status": None, "body": f"timeout: {exc}"}
 
 
 def redacted_config(endpoint: str, bot_id: str, home: Path) -> dict[str, Any]:
@@ -363,8 +383,7 @@ def redacted_config(endpoint: str, bot_id: str, home: Path) -> dict[str, Any]:
         "hermesHome": str(home),
         "headers": {
             "content-type": "application/json",
-            "x-api-key": "[REDACTED]",
-            "x-aikub-bot-id": bot_id,
+            "x-aikub-botops-token": "[REDACTED]",
         },
     }
 
@@ -374,11 +393,14 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true", help="Print discovered payload/config without sending.")
     args = parser.parse_args()
 
-    api_key = require_env("AIKUB_TELEMETRY_API_KEY")
-    bot_id = require_env("AIKUB_TELEMETRY_BOT_ID")
+    api_key = require_token()
+    configured_bot_id = optional_env("AIKUB_TELEMETRY_BOT_ID")
+    bot_id = configured_bot_id or "unknown"
     endpoint = build_endpoint(require_env("AIKUB_TELEMETRY_BASE_URL"))
     home = hermes_home()
     payload = build_payload(bot_id, home)
+    if not configured_bot_id:
+        payload.pop("botId", None)
 
     if args.dry_run:
         print(json.dumps({"dryRun": True, "config": redacted_config(endpoint, bot_id, home), "payload": payload}, ensure_ascii=False, indent=2))

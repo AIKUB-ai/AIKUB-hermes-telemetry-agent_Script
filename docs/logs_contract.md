@@ -22,14 +22,14 @@ Le ERP peut utiliser les champs parsés (`level`, `component`, `timestamp`, etc.
 
 ## Variables `.env`
 
-Même contrat que l'inventaire : seulement 4 variables.
+Même contrat que l'inventaire : URL + token bot seulement.
 
 ```env
 AIKUB_TELEMETRY_BASE_URL=...
-AIKUB_TELEMETRY_BOT_ID=...
-AIKUB_TELEMETRY_SOURCE=...
-AIKUB_TELEMETRY_API_KEY=...
+AIKUB_TELEMETRY_BOTOPS_TOKEN=...
 ```
+
+`AIKUB_TELEMETRY_API_KEY` reste accepté comme alias legacy du token. `AIKUB_TELEMETRY_BOT_ID` et `AIKUB_TELEMETRY_SOURCE` sont optionnels.
 
 Aucun secret ne doit être affiché ou committé.
 
@@ -43,9 +43,10 @@ Headers :
 
 ```http
 content-type: application/json
-x-api-key: [REDACTED]
-x-aikub-bot-id: <AIKUB_TELEMETRY_BOT_ID>
+x-aikub-botops-token: ***
 ```
+
+Ne pas envoyer `x-api-key` ni `x-aikub-bot-id`; l'API associe le bot via Vault.
 
 ## Event actuel
 

@@ -29,6 +29,15 @@ Endpoint :
 POST <AIKUB_TELEMETRY_BASE_URL>/v1/telemetry/events
 ```
 
+Headers :
+
+```http
+content-type: application/json
+x-aikub-botops-token: <AIKUB_TELEMETRY_BOTOPS_TOKEN>
+```
+
+Ne pas envoyer `x-api-key` ni `x-aikub-bot-id`; l'API associe le bot via Vault.
+
 ## Recette validée ERP
 
 Le script envoie :
@@ -62,9 +71,11 @@ Ne pas prendre seulement le dernier chunk.
 ## Déduplication ERP
 
 ```text
-sessions: botId + sessionId
-messages: botId + sessionId + messageId
+sessions: botId résolu côté API + sessionId
+messages: botId résolu côté API + sessionId + messageId
 ```
+
+Le script peut omettre `botId`; AIKUB_Telemetry doit utiliser le bot associé au token Vault.
 
 ## Payload principal
 

@@ -1,4 +1,4 @@
-# AIKUB Telemetry Cron Script - Étapes 1 et 2
+# AIKUB Telemetry Cron Script - Workflow Vault token-only
 
 Tu es un bot Hermes/Aikub. Ce fichier est le script d'instructions que tu lis à chaque fois que ton cron de self-logging est actif.
 
@@ -10,15 +10,22 @@ Objectif des étapes figées :
 
 Ne log rien d'autre pour l'instant.
 
-## 1. Lis seulement les 4 variables `.env`
+## 1. Lis seulement URL + token bot
 
-Les seules variables fournies par ton `.env` sont :
+Les seules variables requises dans ton `.env` sont :
 
 ```env
 AIKUB_TELEMETRY_BASE_URL=...
+AIKUB_TELEMETRY_BOTOPS_TOKEN=...
+```
+
+Compatibilité : `AIKUB_TELEMETRY_API_KEY` est encore accepté comme alias legacy du token pour les bots déjà installés, mais les nouvelles installs doivent utiliser `AIKUB_TELEMETRY_BOTOPS_TOKEN`.
+
+Variables optionnelles seulement pour enrichir le payload local si elles existent :
+
+```env
 AIKUB_TELEMETRY_BOT_ID=...
-AIKUB_TELEMETRY_SOURCE=...
-AIKUB_TELEMETRY_API_KEY=...
+AIKUB_TELEMETRY_SOURCE=hermes
 ```
 
 Règles :
@@ -29,15 +36,19 @@ Règles :
 - Ne demande pas `AIKUB_BOT_MODEL_NAME`.
 - Ne demande pas `AIKUB_BOT_SKILLS_JSON`.
 - Ne lis jamais la base de données directement.
-- N'affiche jamais `AIKUB_TELEMETRY_API_KEY`; si tu dois montrer la config, écris `[REDACTED]`.
+- N'affiche jamais le token; si tu dois montrer la config, écris `[REDACTED]`.
+- N'envoie pas `x-api-key` ni `x-aikub-bot-id`.
+- Envoie seulement `x-aikub-botops-token`; l’API résout le bot via Vault.
 
 ## 2. Respecte le contrat JSON AIKUB_Telemetry
 
 L'API accepte seulement ces champs à la racine :
 
 ```text
-botId, eventType, severity, source, traceId, sessionId, payload, occurredAt
+eventType, severity, source, traceId, sessionId, payload, occurredAt
 ```
+
+`botId` est optionnel/legacy côté script. Avec le workflow Vault, AIKUB_Telemetry résout le bot côté serveur à partir de `x-aikub-botops-token`.
 
 Donc toutes les données découvertes doivent être dans `payload`.
 
@@ -49,10 +60,12 @@ identity, model, skills, skillCount, crons, cronCount, plugins, pluginCount, ena
 
 ## 3. Documente ton identité
 
-Tu dois logger ton identité à partir de :
+Ton identité officielle est résolue côté API à partir du token Vault. Localement, si `AIKUB_TELEMETRY_BOT_ID` existe encore, tu peux l'utiliser pour enrichir `payload.identity`; sinon mets `unknown` dans le payload local et laisse l'API associer le bon bot.
 
-- `AIKUB_TELEMETRY_BOT_ID` pour le slug technique du bot.
-- `AIKUB_TELEMETRY_SOURCE` pour la source déclarée du bot.
+Tu dois logger :
+
+- `AIKUB_TELEMETRY_BOT_ID` seulement si présent, optionnel.
+- `AIKUB_TELEMETRY_SOURCE` si présent, sinon `hermes`.
 - Ton runtime local pour confirmer que tu roules sous Hermes.
 
 Format attendu dans `payload` :
@@ -273,9 +286,10 @@ Headers requis :
 
 ```http
 content-type: application/json
-x-api-key: <AIKUB_TELEMETRY_API_KEY>
-x-aikub-bot-id: <AIKUB_TELEMETRY_BOT_ID>
+x-aikub-botops-token: <AIKUB_TELEMETRY_BOTOPS_TOKEN>
 ```
+
+Ne pas envoyer `x-api-key`. Ne pas envoyer `x-aikub-bot-id`. L'API AIKUB_Telemetry valide le token via Vault et associe le bot côté serveur.
 
 Type d'event :
 
@@ -287,10 +301,9 @@ Format complet attendu :
 
 ```json
 {
-  "botId": "<AIKUB_TELEMETRY_BOT_ID>",
   "eventType": "bot_inventory_snapshot",
   "severity": "INFO",
-  "source": "<AIKUB_TELEMETRY_SOURCE>",
+  "source": "hermes",
   "occurredAt": "<date-utc>",
   "payload": {
     "identity": {
@@ -348,7 +361,7 @@ Exceptions figées :
 
 À chaque cron actif pour la section inventaire :
 
-1. Lire les 4 variables `.env`.
+1. Lire `AIKUB_TELEMETRY_BASE_URL` + le token bot (`AIKUB_TELEMETRY_BOTOPS_TOKEN`, ou alias legacy `AIKUB_TELEMETRY_API_KEY`).
 2. Découvrir localement ton identité Hermes.
 3. Découvrir localement ton modèle Hermes.
 4. Découvrir localement tes skills Hermes.

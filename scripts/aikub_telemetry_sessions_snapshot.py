@@ -46,6 +46,22 @@ def require_env(name: str) -> str:
     return value.strip()
 
 
+def optional_env(name: str, default: str = "") -> str:
+    value = os.getenv(name)
+    if value and value.strip():
+        return value.strip()
+    return default
+
+
+def require_token() -> str:
+    """Return the bot telemetry token. Prefer the explicit BotOps token env name; keep the
+    old API_KEY name as a compatibility alias for already-installed bots."""
+    token = optional_env("AIKUB_TELEMETRY_BOTOPS_TOKEN") or optional_env("AIKUB_TELEMETRY_API_KEY")
+    if not token:
+        raise SystemExit("Missing required env: AIKUB_TELEMETRY_BOTOPS_TOKEN")
+    return token
+
+
 def build_endpoint(base_url: str) -> str:
     base_url = base_url.strip().rstrip("/")
     if not base_url.startswith(("http://", "https://")):
@@ -293,8 +309,7 @@ def send_payload(payload: dict[str, Any], endpoint: str, api_key: str, bot_id: s
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     request = urllib.request.Request(endpoint, data=body, method="POST")
     request.add_header("content-type", "application/json")
-    request.add_header("x-api-key", api_key)
-    request.add_header("x-aikub-bot-id", bot_id)
+    request.add_header("x-aikub-botops-token", api_key)
     with urllib.request.urlopen(request, timeout=timeout) as resp:
         raw = resp.read().decode("utf-8", "replace")
         try:
@@ -313,8 +328,9 @@ def main() -> int:
     args = parser.parse_args()
 
     home = hermes_home()
-    bot_id = require_env("AIKUB_TELEMETRY_BOT_ID")
-    source = require_env("AIKUB_TELEMETRY_SOURCE")
+    configured_bot_id = optional_env("AIKUB_TELEMETRY_BOT_ID")
+    bot_id = configured_bot_id or "unknown"
+    source = optional_env("AIKUB_TELEMETRY_SOURCE", "hermes")
     now = datetime.now(timezone.utc)
     occurred_at = now.isoformat().replace("+00:00", "Z")
     batch_id = f"hermes-sessions-full-{bot_id}-{now.strftime('%Y%m%dT%H%M%SZ')}"
@@ -325,6 +341,9 @@ def main() -> int:
         build_payload(bot_id, source, batch_id, occurred_at, overview, sessions, chunk, idx, len(message_chunks))
         for idx, chunk in enumerate(message_chunks, 1)
     ]
+    if not configured_bot_id:
+        for payload in payloads:
+            payload.pop("botId", None)
     total_bytes = sum(len(json.dumps(payload, ensure_ascii=False).encode("utf-8")) for payload in payloads)
 
     if args.dry_run:
@@ -349,7 +368,7 @@ def main() -> int:
         return 0
 
     endpoint = build_endpoint(require_env("AIKUB_TELEMETRY_BASE_URL"))
-    api_key = require_env("AIKUB_TELEMETRY_API_KEY")
+    api_key = require_token()
     results: list[dict[str, Any]] = []
     for payload in payloads:
         session_payload = payload["payload"]["sessions"]
