@@ -43,8 +43,8 @@ Ne pas envoyer `x-api-key` ni `x-aikub-bot-id`; l'API associe le bot via Vault.
 Le script envoie :
 
 ```text
-- sessions avec au moins 1 message actif non vide
-- messages active=1 avec content non vide
+- sessions avec au moins 1 message actif non vide et non compacted
+- messages active=1, compacted=0, avec content non vide
 - pas les sessions à 0 message
 - pas les messages vides
 - pas les messages compacted/inactive

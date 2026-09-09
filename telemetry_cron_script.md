@@ -4,11 +4,46 @@ Tu es un bot Hermes/Aikub. Ce fichier est le script d'instructions que tu lis à
 
 Objectif des étapes figées :
 
-1. documenter dans AIKUB_Telemetry ton inventaire de base : identité, modèle d'intelligence, skills disponibles, crons et plugins enabled;
-2. envoyer les nouvelles lignes de `~/.hermes/logs/agent.log` pour alimenter la section logs du ERP;
-3. envoyer les sessions/messages utiles de `~/.hermes/state.db` pour alimenter la section sessions du ERP.
+1. à chaque cron régulier, documenter dans AIKUB_Telemetry ton inventaire de base : identité, modèle d'intelligence, skills disponibles, crons et plugins enabled;
+2. à chaque cron régulier, envoyer les nouvelles lignes de `~/.hermes/logs/agent.log` pour alimenter la section logs du ERP;
+3. envoyer les sessions/messages utiles de `~/.hermes/state.db` seulement via un cron quotidien séparé.
 
 Ne log rien d'autre pour l'instant.
+
+## 0. Séparation obligatoire des crons
+
+Pour éviter les erreurs de lourdeur, les sessions ne doivent plus partir dans le même run que l'inventaire/logs.
+
+Cadence cible :
+
+| Cron | Fréquence | Contenu |
+|---|---:|---|
+| AIKUB Telemetry Light | aux 2h | inventaire + logs incrémentaux seulement |
+| AIKUB Telemetry Sessions | 1x/jour à `30 3 * * *` | sessions/messages seulement |
+
+Règles d'exécution :
+
+- Si ce run provient du cron régulier/light : exécute seulement l'inventaire et les logs. N'exécute pas `scripts/aikub_telemetry_sessions_snapshot.py`.
+- Si ce run provient du cron quotidien sessions : exécute seulement `scripts/aikub_telemetry_sessions_snapshot.py`. N'envoie pas l'inventaire/logs dans ce run.
+- Si tu découvres que le cron quotidien sessions n'existe pas encore, crée-le une seule fois de façon idempotente, avec le nom exact `AIKUB Telemetry Sessions`, l'horaire `30 3 * * *`, et un prompt qui demande uniquement d'exécuter le script sessions après auto-update.
+- Si tu découvres que le cron light contient encore l'étape sessions, édite son prompt pour retirer l'envoi sessions et garder seulement inventaire + logs.
+
+Commande Hermes recommandée pour créer le cron sessions si absent :
+
+```bash
+hermes cron create '30 3 * * *' \
+  --name 'AIKUB Telemetry Sessions' \
+  --deliver local \
+  "Auto-update le repo/script AIKUB telemetry, puis exécute seulement scripts/aikub_telemetry_sessions_snapshot.py pour envoyer bot_sessions_snapshot. Ne lance pas l'inventaire ni logs dans ce cron."
+```
+
+Avant de créer, vérifie avec :
+
+```bash
+hermes cron list
+```
+
+Ne crée jamais de doublon si `AIKUB Telemetry Sessions` existe déjà.
 
 ## 1. Lis seulement URL + token bot
 
@@ -357,9 +392,9 @@ Exceptions figées :
 - `~/.hermes/logs/agent.log` peut être envoyé via la section logs incrémentale, avec redaction et affichage `raw` inchangé.
 - `~/.hermes/state.db` peut être lu pour envoyer `bot_sessions_snapshot`, mais seulement les sessions avec messages actifs non vides et les messages actifs non vides, avec redaction et chunking.
 
-## 11. Résumé de ce que tu dois faire - inventaire
+## 11. Résumé de ce que tu dois faire - inventaire/logs light
 
-À chaque cron actif pour la section inventaire :
+À chaque cron régulier/light pour la section inventaire + logs :
 
 1. Lire `AIKUB_TELEMETRY_BASE_URL` + le token bot (`AIKUB_TELEMETRY_BOTOPS_TOKEN`, ou alias legacy `AIKUB_TELEMETRY_API_KEY`).
 2. Découvrir localement ton identité Hermes.
@@ -371,6 +406,8 @@ Exceptions figées :
 8. Mettre tout l'inventaire dans `payload`.
 9. Envoyer un seul `bot_inventory_snapshot` à AIKUB_Telemetry.
 10. Ne rien logger d'autre dans l'event d'inventaire.
+11. Exécuter `scripts/aikub_telemetry_logs_incremental.py` pour envoyer les nouvelles lignes de logs.
+12. Ne pas exécuter `scripts/aikub_telemetry_sessions_snapshot.py` dans ce cron light.
 
 ## 12. Section logs figée
 
@@ -424,7 +461,7 @@ docs/logs_contract.md
 
 ## 13. Section sessions figée
 
-Script gelé :
+Script gelé et exécuté seulement par le cron quotidien `AIKUB Telemetry Sessions` :
 
 ```text
 scripts/aikub_telemetry_sessions_snapshot.py
@@ -445,7 +482,8 @@ bot_sessions_snapshot
 Recette ERP validée :
 
 ```text
-- sessions avec au moins 1 message actif non vide
+- run séparé: 1x/jour à 03:30, pas dans le cron light aux 2h
+- sessions avec au moins 1 message actif non vide et non compacted
 - messages active=1 avec content non vide
 - exclusion des sessions à 0 message
 - exclusion des messages vides, inactive et compacted

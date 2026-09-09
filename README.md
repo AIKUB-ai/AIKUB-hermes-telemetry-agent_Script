@@ -39,7 +39,31 @@ docs/logs_contract.md
 docs/sessions_contract.md
 ```
 
-## Étapes envoyées par le cron
+## Étapes envoyées par cron
+
+### Cron régulier/light, aux 2h
+
+Le cron régulier envoie seulement :
+
+1. inventaire bot;
+2. logs Hermes incrémentaux.
+
+Il ne doit pas envoyer les sessions.
+
+### Cron sessions, 1x/jour à 03:30
+
+Le cron sessions envoie seulement `bot_sessions_snapshot` depuis `~/.hermes/state.db`. Il ne doit pas envoyer l'inventaire ni les logs.
+
+À l'auto-update, le bot doit vérifier qu'un cron nommé `AIKUB Telemetry Sessions` existe. S'il est absent, il doit le créer une seule fois :
+
+```bash
+hermes cron create '30 3 * * *' \
+  --name 'AIKUB Telemetry Sessions' \
+  --deliver local \
+  "Auto-update le repo/script AIKUB telemetry, puis exécute seulement scripts/aikub_telemetry_sessions_snapshot.py pour envoyer bot_sessions_snapshot. Ne lance pas l'inventaire ni logs dans ce cron."
+```
+
+Ne jamais créer de doublon si ce nom existe déjà.
 
 ### 1. Inventaire bot
 
@@ -81,7 +105,7 @@ Recette figée pour le ERP :
 
 ```text
 - eventType: bot_sessions_snapshot
-- sessions avec au moins 1 message actif non vide
+- sessions avec au moins 1 message actif non vide et non compacted
 - messages active=1 avec content non vide
 - pas les sessions à 0 message
 - pas les messages compacted/inactive

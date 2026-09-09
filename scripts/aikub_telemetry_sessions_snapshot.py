@@ -122,7 +122,9 @@ def collect_sessions_and_messages(home: Path, max_content_chars: int) -> tuple[d
     raw_total_sessions = cur.execute("SELECT count(*) FROM sessions").fetchone()[0]
     raw_total_messages = cur.execute("SELECT count(*) FROM messages").fetchone()[0]
     active_messages = cur.execute("SELECT count(*) FROM messages WHERE active = 1").fetchone()[0]
-    visible_messages = cur.execute("SELECT count(*) FROM messages WHERE active = 1 AND coalesce(content, '') != ''").fetchone()[0]
+    visible_messages = cur.execute(
+        "SELECT count(*) FROM messages WHERE active = 1 AND coalesce(compacted, 0) = 0 AND coalesce(content, '') != ''"
+    ).fetchone()[0]
 
     session_rows = cur.execute(
         """
@@ -133,6 +135,7 @@ def collect_sessions_and_messages(home: Path, max_content_chars: int) -> tuple[d
         FROM sessions s
         JOIN messages m ON m.session_id = s.id
             AND m.active = 1
+            AND coalesce(m.compacted, 0) = 0
             AND coalesce(m.content, '') != ''
         GROUP BY s.id
         HAVING visible_message_count > 0
@@ -148,6 +151,7 @@ def collect_sessions_and_messages(home: Path, max_content_chars: int) -> tuple[d
         FROM sessions s
         JOIN messages m ON m.session_id = s.id
             AND m.active = 1
+            AND coalesce(m.compacted, 0) = 0
             AND coalesce(m.content, '') != ''
         GROUP BY s.source
         ORDER BY c DESC
@@ -159,7 +163,7 @@ def collect_sessions_and_messages(home: Path, max_content_chars: int) -> tuple[d
         """
         SELECT max(timestamp)
         FROM messages
-        WHERE active = 1 AND coalesce(content, '') != ''
+        WHERE active = 1 AND coalesce(compacted, 0) = 0 AND coalesce(content, '') != ''
         """
     ).fetchone()[0]
 
@@ -198,7 +202,7 @@ def collect_sessions_and_messages(home: Path, max_content_chars: int) -> tuple[d
         SELECT id, session_id, role, content, tool_name, timestamp, token_count,
                platform_message_id, active, compacted
         FROM messages
-        WHERE active = 1 AND coalesce(content, '') != ''
+        WHERE active = 1 AND coalesce(compacted, 0) = 0 AND coalesce(content, '') != ''
         ORDER BY timestamp ASC
         """
     ):
@@ -389,6 +393,26 @@ def main() -> int:
                     "chunkIndex": session_payload["chunkIndex"],
                     "status": exc.code,
                     "body": exc.read().decode("utf-8", "replace")[:1000],
+                }
+            )
+            break
+        except urllib.error.URLError as exc:
+            results.append(
+                {
+                    "ok": False,
+                    "chunkIndex": session_payload["chunkIndex"],
+                    "status": "url_error",
+                    "body": str(exc.reason)[:1000],
+                }
+            )
+            break
+        except Exception as exc:
+            results.append(
+                {
+                    "ok": False,
+                    "chunkIndex": session_payload["chunkIndex"],
+                    "status": "error",
+                    "body": str(exc)[:1000],
                 }
             )
             break
