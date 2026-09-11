@@ -12,8 +12,10 @@ Required env:
 Optional env:
   AIKUB_TELEMETRY_API_KEY=[REDACTED]   # legacy alias for token
   AIKUB_BACKUP_BOT_SLUG=<bot-slug>     # defaults to AIKUB_TELEMETRY_BOT_ID or hostname
-  AIKUB_BACKUP_PATHS=~/.hermes,/opt/my-bot/data
-  AIKUB_BACKUP_ENV_FILES=.env,~/.hermes/.env
+  AIKUB_BACKUP_PATHS=~/.hermes,/opt/my-bot/data  # optional override; otherwise auto-discovery
+  AIKUB_BACKUP_DISCOVERY_ROOTS=~,.,/opt,/srv     # optional safe scan roots
+  AIKUB_BACKUP_DISCOVERY_MAX_DEPTH=4
+  AIKUB_BACKUP_ENV_FILES=.env,~/.hermes/.env     # optional override; otherwise auto-discovery
   AIKUB_BACKUP_INCLUDE_ENV=1           # default: 1 for the current temporary phase
   AIKUB_BACKUP_TYPE=daily              # daily|weekly|monthly
   AIKUB_BACKUP_EXCLUDES=.git,node_modules,.venv,__pycache__,tmp,cache
@@ -58,6 +60,9 @@ DEFAULT_EXCLUDES = [
     "tmp",
     "cache",
     "logs/*.log",
+    ".env",
+    "*.env",
+    ".env.*",
 ]
 ALLOWED_TYPES = {"daily", "weekly", "monthly"}
 START_PATH = "/v1/backups/uploads/start"
@@ -143,31 +148,153 @@ def csv_paths(value: str | None) -> list[Path]:
     return [Path(item.strip()).expanduser() for item in value.split(",") if item.strip()]
 
 
+def unique_existing(paths: Iterable[Path]) -> list[Path]:
+    seen: set[Path] = set()
+    result: list[Path] = []
+    for raw in paths:
+        path = raw.expanduser()
+        if not path.exists():
+            continue
+        try:
+            key = path.resolve()
+        except OSError:
+            key = path.absolute()
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(path)
+    return result
+
+
+def discovery_roots() -> list[Path]:
+    configured = csv_paths(optional_env("AIKUB_BACKUP_DISCOVERY_ROOTS"))
+    candidates = configured or [Path.home(), Path.cwd(), Path("/opt"), Path("/srv")]
+    safe: list[Path] = []
+    for path in candidates:
+        path = path.expanduser()
+        try:
+            resolved = path.resolve() if path.exists() else path.absolute()
+        except OSError:
+            resolved = path.absolute()
+        # Keep discovery bounded. Never walk the filesystem root by accident.
+        if str(resolved) == "/":
+            continue
+        if path.exists() and path.is_dir():
+            safe.append(path)
+    return unique_existing(safe)
+
+
+def max_discovery_depth() -> int:
+    try:
+        return max(0, min(8, int(optional_env("AIKUB_BACKUP_DISCOVERY_MAX_DEPTH", "4") or "4")))
+    except ValueError:
+        return 4
+
+
+def looks_like_hermes_dir(path: Path) -> bool:
+    names = {"config.yaml", "config.yml", "state.db", "skills", "cron", "memories", "plugins", "profiles", "logs"}
+    try:
+        existing = {child.name for child in path.iterdir()}
+    except OSError:
+        return False
+    if path.name in {".hermes", "hermes"} and existing.intersection(names):
+        return True
+    score = len(existing.intersection({"skills", "cron", "memories", "plugins"}))
+    return score >= 2 or "state.db" in existing
+
+
+def walk_candidate_dirs(roots: list[Path]) -> Iterable[Path]:
+    skip_names = set(DEFAULT_EXCLUDES + [".cache", "Downloads", "Music", "Pictures", "Videos"])
+    max_depth = max_discovery_depth()
+    for root in roots:
+        root = root.expanduser()
+        root_depth = len(root.parts)
+        for current, dirs, _files in os.walk(root):
+            path = Path(current)
+            depth = len(path.parts) - root_depth
+            dirs[:] = [d for d in dirs if (d == ".hermes" or (d not in skip_names and not d.startswith(".")))]
+            if depth > max_depth:
+                dirs[:] = []
+                continue
+            yield path
+
+
+def discover_hermes_dirs() -> list[Path]:
+    candidates: list[Path] = []
+    explicit: list[Path | None] = [
+        hermes_home(),
+        Path(os.getenv("HERMES_PROFILE_DIR", "")).expanduser() if os.getenv("HERMES_PROFILE_DIR") else None,
+        Path(os.getenv("HERMES_CONFIG_DIR", "")).expanduser() if os.getenv("HERMES_CONFIG_DIR") else None,
+        Path.cwd() / ".hermes",
+    ]
+    if not (os.getenv("HERMES_HOME") or os.getenv("HERMES_REAL_HOME")):
+        explicit.append(Path.home() / ".hermes")
+    candidates.extend([p for p in explicit if p is not None])
+    roots = discovery_roots()
+    for path in walk_candidate_dirs(roots):
+        if looks_like_hermes_dir(path):
+            candidates.append(path)
+        # Hermes profiles may store personal memory/skills under profiles/<name>/...
+        if path.name == "profiles" and path.is_dir():
+            try:
+                candidates.extend(child for child in path.iterdir() if child.is_dir())
+            except OSError:
+                pass
+    return unique_existing(candidates)
+
+
+def discover_app_dirs() -> list[Path]:
+    markers = {"package.json", "pyproject.toml", "requirements.txt", "Dockerfile", "docker-compose.yml", "compose.yml", "bot.py", "main.py", "app.py"}
+    candidates: list[Path] = []
+    for root in discovery_roots():
+        for path in walk_candidate_dirs([root]):
+            try:
+                names = {child.name for child in path.iterdir()}
+            except OSError:
+                continue
+            if names.intersection(markers):
+                candidates.append(path)
+    return unique_existing(candidates)[:20]
+
+
 def default_backup_paths() -> list[Path]:
-    paths = csv_paths(optional_env("AIKUB_BACKUP_PATHS"))
-    if paths:
-        return paths
-    home = hermes_home()
-    defaults = [home / "config.yaml", home / "cron", home / "skills", home / "state.db", home / "memories", home / "plugins"]
-    return [path for path in defaults if path.exists()]
+    configured = csv_paths(optional_env("AIKUB_BACKUP_PATHS"))
+    if configured:
+        return configured
+
+    paths: list[Path] = []
+    for home in discover_hermes_dirs():
+        paths.append(home)
+        profile_root = home / "profiles"
+        if profile_root.exists():
+            try:
+                paths.extend(child for child in profile_root.iterdir() if child.is_dir())
+            except OSError:
+                pass
+    paths.extend(discover_app_dirs())
+    return unique_existing(paths)
 
 
 def env_files() -> list[Path]:
     configured = csv_paths(optional_env("AIKUB_BACKUP_ENV_FILES"))
     if configured:
         return configured
-    candidates = [Path.cwd() / ".env", Path.home() / ".env", hermes_home() / ".env"]
-    seen: set[Path] = set()
-    result: list[Path] = []
-    for path in candidates:
-        try:
-            resolved = path.expanduser().resolve()
-        except OSError:
-            resolved = path.expanduser()
-        if resolved not in seen and resolved.exists() and resolved.is_file():
-            seen.add(resolved)
-            result.append(path.expanduser())
-    return result
+    candidates: list[Path] = [Path.cwd() / ".env", hermes_home() / ".env"]
+    roots = discovery_roots()
+    home_env = Path.home() / ".env"
+    if not optional_env("AIKUB_BACKUP_DISCOVERY_ROOTS") or any(root == Path.home() for root in roots):
+        candidates.append(home_env)
+    for root in default_backup_paths() + roots:
+        env_path = root / ".env"
+        if env_path.exists() and env_path.is_file():
+            candidates.append(env_path)
+    # Bounded extra search for env files near likely bot/Hermes roots.
+    for root in discovery_roots():
+        for path in walk_candidate_dirs([root]):
+            env_path = path / ".env"
+            if env_path.exists() and env_path.is_file():
+                candidates.append(env_path)
+    return unique_existing(candidates)
 
 
 def exclude_patterns() -> list[str]:
@@ -268,6 +395,12 @@ def build_archive(output_dir: Path) -> dict[str, Any]:
         "envMode": "plain-temporary",
         "roots": [str(p) for p in roots],
         "envFiles": [str(p) for p in envs],
+        "discovery": {
+            "mode": "explicit" if optional_env("AIKUB_BACKUP_PATHS") else "auto",
+            "rootsScanned": [str(p) for p in discovery_roots()],
+            "maxDepth": max_discovery_depth(),
+            "hermesDirs": [str(p) for p in discover_hermes_dirs()],
+        },
         "excludes": excludes,
         "host": {"hostname": socket.gethostname(), "platform": platform.platform()},
         "warning": ".env files are included in plain text for the temporary AIKUB rollout; do not expose downloaded archives.",
@@ -419,6 +552,8 @@ def public_summary(archive: dict[str, Any]) -> dict[str, Any]:
         "includesEnv": archive["manifest"].get("includesEnv"),
         "envMode": archive["manifest"].get("envMode"),
         "roots": archive["manifest"].get("roots"),
+        "discoveryMode": archive["manifest"].get("discovery", {}).get("mode"),
+        "discoveredHermesDirCount": len(archive["manifest"].get("discovery", {}).get("hermesDirs", [])),
         "envFiles": ["[REDACTED_PATH]" for _ in archive["manifest"].get("envFiles", [])],
         "skippedCount": len(archive.get("skipped", [])),
         "skippedPreview": archive.get("skipped", [])[:20],

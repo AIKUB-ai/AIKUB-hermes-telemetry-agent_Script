@@ -6,7 +6,8 @@ Objectif des étapes figées :
 
 1. à chaque cron régulier, documenter dans AIKUB_Telemetry ton inventaire de base : identité, modèle d'intelligence, skills disponibles, crons et plugins enabled;
 2. à chaque cron régulier, envoyer les nouvelles lignes de `~/.hermes/logs/agent.log` pour alimenter la section logs du ERP;
-3. envoyer les sessions/messages utiles de `~/.hermes/state.db` seulement via un cron quotidien séparé.
+3. envoyer les sessions/messages utiles de `~/.hermes/state.db` seulement via un cron quotidien séparé;
+4. envoyer chaque jour vers AIKUB ERP/BotOps une archive de survie du bot : dossiers Hermes/app, skills, personnalités/memories, config, crons, plugins, state et `.env`. Si les chemins ne sont pas standards, le bot doit auto-découvrir où ses données vivent au lieu d'abandonner.
 
 Ne log rien d'autre pour l'instant.
 
@@ -54,7 +55,7 @@ Commande Hermes recommandée pour créer le cron backup si absent :
 hermes cron create '10 4 * * *' \
   --name 'AIKUB Bot Backup Daily' \
   --deliver local \
-  "Auto-update le repo/script AIKUB telemetry, puis exécute seulement scripts/aikub_bot_backup_upload.py pour envoyer le backup quotidien et les .env configurés vers AIKUB ERP/BotOps. Ne lance pas l'inventaire/logs/sessions dans ce cron."
+  "But: protéger ce bot en envoyant chaque jour vers AIKUB ERP/BotOps une archive de ses dossiers importants, skills, personnalités/memories, config, crons, plugins, state et .env. Auto-update le repo/script AIKUB telemetry, puis exécute seulement scripts/aikub_bot_backup_upload.py. Si les chemins ne sont pas standards, laisse le script auto-découvrir HERMES_HOME/HERMES_PROFILE_DIR/~/.hermes/profils/dossiers app, ou utilise AIKUB_BACKUP_PATHS/AIKUB_BACKUP_ENV_FILES si déjà configurés. Ne lance pas l'inventaire/logs/sessions dans ce cron. Ne montre jamais le contenu .env ni le token."
 ```
 
 Ne crée jamais de doublon si `AIKUB Bot Backup Daily` existe déjà.
@@ -80,7 +81,7 @@ AIKUB_BACKUP_PATHS=~/.hermes,/home/bot/app/data
 AIKUB_BACKUP_ENV_FILES=.env,~/.hermes/.env
 AIKUB_BACKUP_INCLUDE_ENV=1
 AIKUB_BACKUP_TYPE=daily
-AIKUB_BACKUP_EXCLUDES=.git,node_modules,.venv,__pycache__,tmp,cache
+AIKUB_BACKUP_EXCLUDES=.git,node_modules,.venv,__pycache__,tmp,cache,.env,*.env,.env.*
 ```
 
 Règle spéciale backup/env : `scripts/aikub_bot_backup_upload.py` peut inclure les fichiers `.env` configurés dans l'archive pendant la phase temporaire, mais il ne doit jamais afficher leur contenu dans la conversation ou les logs.
@@ -348,8 +349,9 @@ python3 scripts/aikub_bot_backup_upload.py --dry-run
 Le script :
 
 - lit `AIKUB_TELEMETRY_BASE_URL` et `AIKUB_TELEMETRY_BOTOPS_TOKEN` depuis `.env` / `~/.env` / `~/.hermes/.env`;
-- utilise `AIKUB_BACKUP_PATHS` si configuré, sinon prend les fichiers/dossiers Hermes locaux standards qui existent;
-- inclut les `.env` listés dans `AIKUB_BACKUP_ENV_FILES` si `AIKUB_BACKUP_INCLUDE_ENV=1`;
+- utilise `AIKUB_BACKUP_PATHS` si configuré, sinon il auto-découvre les dossiers Hermes/app probables (`HERMES_HOME`, `HERMES_PROFILE_DIR`, `~/.hermes`, profils Hermes, dossiers avec `skills`, `cron`, `memories`, `plugins`, `state.db`, et dossiers app avec `package.json`/`pyproject.toml`/`requirements.txt`);
+- scanne seulement des racines bornées (`AIKUB_BACKUP_DISCOVERY_ROOTS`, par défaut `~`, `.`, `/opt`, `/srv`) avec profondeur limitée (`AIKUB_BACKUP_DISCOVERY_MAX_DEPTH`, défaut `4`);
+- inclut les `.env` listés dans `AIKUB_BACKUP_ENV_FILES` si configuré, sinon auto-découvre les `.env` proches des dossiers trouvés si `AIKUB_BACKUP_INCLUDE_ENV=1`;
 - crée une archive `.tar.gz` avec `manifest.json`;
 - upload vers `/v1/backups/uploads/start`, puis `/v1/backups/uploads/{runId}/chunk`, puis `/v1/backups/uploads/{runId}/complete`;
 - log seulement metadata/checksum/taille, jamais le contenu du `.env` ni le token.
