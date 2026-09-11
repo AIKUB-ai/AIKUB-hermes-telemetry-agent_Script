@@ -44,6 +44,19 @@ Avant l'envoi, chaque ligne doit être nettoyée comme dans le script sessions :
 
 But : éviter qu'une seule ligne corrompue de `agent.log` fasse répondre `500 INTERNAL_ERROR` au backend et laisse le curseur logs bloqué sur le même chunk.
 
+## Isolation/quarantaine anti-gel
+
+Si un chunk est encore refusé par l'API après nettoyage, le script doit :
+
+1. couper le chunk en deux;
+2. réessayer chaque moitié;
+3. répéter jusqu'à isoler une seule ligne fautive;
+4. écrire cette ligne déjà redactionnée dans `~/.hermes/aikub_telemetry_state/failed_log_entries.jsonl`;
+5. continuer avec les autres lignes;
+6. avancer le curseur seulement si le run est complété ou si les seules erreurs restantes ont été quarantinées.
+
+Protection : `--max-quarantine` limite le nombre de lignes isolées par run. Si trop de lignes échouent, le script stoppe sans avancer le curseur pour éviter de masquer une panne backend générale.
+
 ## Endpoint
 
 ```text

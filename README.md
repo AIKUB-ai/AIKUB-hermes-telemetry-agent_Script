@@ -107,6 +107,8 @@ Le script est incrémental : il garde un curseur local et envoie seulement les n
 
 Avant l'envoi, le script nettoie les caractères de contrôle invalides (`NUL`/`\x00` et autres bytes non imprimables) puis redactionne les secrets. Une ligne de log corrompue ne doit pas faire planter tout le batch avec un `500 INTERNAL_ERROR` côté backend.
 
+Si un chunk est encore refusé par l'API, le script le coupe automatiquement en morceaux plus petits pour isoler la ligne fautive. Une fois rendu à une seule ligne refusée, il la met en quarantaine locale dans `~/.hermes/aikub_telemetry_state/failed_log_entries.jsonl`, jusqu'à `--max-quarantine` lignes par run, puis il continue les autres logs et avance le curseur. Ça évite qu'un parc complet de bots reste gelé sur la même ligne pendant des jours.
+
 Si un wrapper shell local lance inventaire + logs avec `set -e`, il doit traiter l'étape logs comme non bloquante pour le reste du cron light. Exemple : `if ! python3 scripts/aikub_telemetry_logs_incremental.py --first-run-days 3 --chunk-size 250; then echo "WARN: logs snapshot failed; continuing" >&2; fi`.
 
 Le rendu ERP doit afficher exactement :

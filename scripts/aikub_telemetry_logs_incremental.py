@@ -5,6 +5,8 @@ Behavior:
 - First run: sends log lines from the last N days.
 - Later runs: sends only bytes appended since the saved cursor.
 - Splits transport into chunks to avoid oversized API payloads.
+- If a chunk is rejected, splits it smaller to isolate the bad log entry instead of freezing the whole bot.
+- Quarantines a small number of single bad log entries locally, then advances the cursor for the rest.
 - Chunks are NOT duplicates; they are pages from the same logical snapshot.
 - Redacts secret-like values before sending.
 - Removes invalid control characters before sending so one NUL byte cannot poison the API/DB payload.
@@ -26,6 +28,7 @@ LOGGER_PATH = Path(__file__).with_name("aikub_telemetry_logger.py")
 HERMES_HOME = Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes"))).expanduser()
 LOG_PATH = HERMES_HOME / "logs" / "agent.log"
 STATE_PATH = HERMES_HOME / "aikub_telemetry_state" / "logs_agent_log.json"
+QUARANTINE_PATH = HERMES_HOME / "aikub_telemetry_state" / "failed_log_entries.jsonl"
 
 LINE_RE = re.compile(r"^(?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3})\s+(?P<level>[A-Z]+)\s+(?P<rest>.*)$")
 SECRET_PATTERNS = [
@@ -196,7 +199,71 @@ def collect_lines(first_run_days: int, baseline_line: int | None = None) -> tupl
     return entries, new_state
 
 
-def send(entries: list[dict[str, Any]], state: dict[str, Any], chunk_size: int, dry_run: bool) -> dict[str, Any]:
+def append_quarantine(batch_id: str, entry: dict[str, Any], result: dict[str, Any]) -> None:
+    QUARANTINE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    record = {
+        "quarantinedAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "batchId": batch_id,
+        "reason": "single_log_entry_rejected_by_api",
+        "status": result.get("status"),
+        "body": result.get("body"),
+        "entry": entry,
+    }
+    with QUARANTINE_PATH.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
+def build_log_payload(
+    base_payload: dict[str, Any],
+    batch_id: str,
+    bot_id: str,
+    configured_bot_id: str | None,
+    source: str,
+    state: dict[str, Any],
+    chunk: list[dict[str, Any]],
+    chunk_index: int,
+    chunk_count: int,
+) -> dict[str, Any]:
+    return {
+        **({"botId": bot_id} if configured_bot_id else {}),
+        "eventType": "bot_inventory_snapshot",
+        "severity": "INFO",
+        "source": source,
+        "traceId": f"{batch_id}-chunk-{chunk_index:03d}",
+        "sessionId": batch_id,
+        "occurredAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "payload": {
+            "identity": base_payload["payload"].get("identity"),
+            "model": base_payload["payload"].get("model"),
+            "logs": {
+                "source": "hermes_agent_log_file",
+                "logName": "agent.log",
+                "path": str(LOG_PATH),
+                "batchId": batch_id,
+                "chunkIndex": chunk_index,
+                "chunkCount": chunk_count,
+                "transportChunkingOnly": True,
+                "dedupeStrategy": "persistent_file_cursor_offset_inode",
+                "mode": state.get("mode"),
+                "lineStart": chunk[0]["line"] if chunk else None,
+                "lineEnd": chunk[-1]["line"] if chunk else None,
+                "returnedCount": len(chunk),
+                "totalReturnedAcrossChunks": state.get("entriesInThisRun"),
+                "redactionApplied": True,
+                "controlCharSanitizationApplied": True,
+                "items": chunk,
+            },
+            "telemetryTest": {
+                "section": "logs",
+                "mode": "incremental_no_duplicates",
+                "batchId": batch_id,
+                "firstRunDays": 3,
+            },
+        },
+    }
+
+
+def send(entries: list[dict[str, Any]], state: dict[str, Any], chunk_size: int, dry_run: bool, max_quarantine: int) -> dict[str, Any]:
     base = load_base_logger()
     home = HERMES_HOME
     base_payload = base.build_payload(base.optional_env("AIKUB_TELEMETRY_BOT_ID", "unknown"), home)
@@ -207,51 +274,20 @@ def send(entries: list[dict[str, Any]], state: dict[str, Any], chunk_size: int, 
     source = base.optional_env("AIKUB_TELEMETRY_SOURCE", "hermes")
     batch_id = f"agent-log-incremental-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
 
-    chunks = [entries[i:i + chunk_size] for i in range(0, len(entries), chunk_size)] or [[]]
-    results = []
-    for idx, chunk in enumerate(chunks, 1):
-        payload = {
-            **({"botId": bot_id} if configured_bot_id else {}),
-            "eventType": "bot_inventory_snapshot",
-            "severity": "INFO",
-            "source": source,
-            "traceId": f"{batch_id}-chunk-{idx:03d}",
-            "sessionId": batch_id,
-            "occurredAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-            "payload": {
-                "identity": base_payload["payload"].get("identity"),
-                "model": base_payload["payload"].get("model"),
-                "logs": {
-                    "source": "hermes_agent_log_file",
-                    "logName": "agent.log",
-                    "path": str(LOG_PATH),
-                    "batchId": batch_id,
-                    "chunkIndex": idx,
-                    "chunkCount": len(chunks),
-                    "transportChunkingOnly": True,
-                    "dedupeStrategy": "persistent_file_cursor_offset_inode",
-                    "mode": state.get("mode"),
-                    "lineStart": chunk[0]["line"] if chunk else None,
-                    "lineEnd": chunk[-1]["line"] if chunk else None,
-                    "returnedCount": len(chunk),
-                    "totalReturnedAcrossChunks": len(entries),
-                    "redactionApplied": True,
-                    "items": chunk,
-                },
-                "telemetryTest": {
-                    "section": "logs",
-                    "mode": "incremental_no_duplicates",
-                    "batchId": batch_id,
-                    "firstRunDays": 3,
-                },
-            },
-        }
+    planned_chunks = [entries[i:i + chunk_size] for i in range(0, len(entries), chunk_size)] or [[]]
+    results: list[dict[str, Any]] = []
+    quarantined: list[dict[str, Any]] = []
+    abort_reason = None
+
+    def post_chunk(chunk: list[dict[str, Any]], label: str, chunk_index: int, chunk_count: int) -> dict[str, Any]:
+        payload = build_log_payload(base_payload, batch_id, bot_id, configured_bot_id, source, state, chunk, chunk_index, chunk_count)
         if dry_run:
             result = {"ok": True, "status": "dry_run", "body": None}
         else:
             result = base.post_event(endpoint, api_key, bot_id, payload)
         results.append({
-            "chunkIndex": idx,
+            "chunkIndex": chunk_index,
+            "label": label,
             "ok": result.get("ok"),
             "status": result.get("status"),
             "body": result.get("body"),
@@ -259,17 +295,42 @@ def send(entries: list[dict[str, Any]], state: dict[str, Any], chunk_size: int, 
             "lineEnd": payload["payload"]["logs"]["lineEnd"],
             "returnedCount": len(chunk),
         })
-        if not result.get("ok"):
-            break
         if not dry_run:
             time.sleep(0.05)
+        return result
+
+    def send_resilient(chunk: list[dict[str, Any]], label: str, chunk_index: int, chunk_count: int) -> bool:
+        nonlocal abort_reason
+        result = post_chunk(chunk, label, chunk_index, chunk_count)
+        if result.get("ok"):
+            return True
+        if len(chunk) <= 1:
+            if len(quarantined) >= max_quarantine:
+                abort_reason = f"max_quarantine_exceeded_{max_quarantine}"
+                return False
+            entry = chunk[0] if chunk else {"line": None}
+            quarantined.append({"line": entry.get("line"), "status": result.get("status")})
+            if not dry_run and chunk:
+                append_quarantine(batch_id, entry, result)
+            return True
+        mid = max(1, len(chunk) // 2)
+        return send_resilient(chunk[:mid], f"{label}.split-a", chunk_index, chunk_count) and send_resilient(chunk[mid:], f"{label}.split-b", chunk_index, chunk_count)
+
+    for idx, chunk in enumerate(planned_chunks, 1):
+        if not send_resilient(chunk, f"chunk-{idx:03d}", idx, len(planned_chunks)):
+            break
+
+    completed = abort_reason is None
     return {
         "batchId": batch_id,
         "chunkSize": chunk_size,
         "chunksAttempted": len(results),
-        "chunksTotal": len(chunks),
-        "allOk": all(r["ok"] for r in results) and len(results) == len(chunks),
+        "chunksTotal": len(planned_chunks),
+        "allOk": completed,
         "entries": len(entries),
+        "quarantinedCount": len(quarantined),
+        "quarantinePath": str(QUARANTINE_PATH) if quarantined else None,
+        "abortReason": abort_reason,
         "stateToSave": state,
         "results": results,
     }
@@ -281,10 +342,11 @@ def main() -> int:
     parser.add_argument("--chunk-size", type=int, default=250)
     parser.add_argument("--baseline-line", type=int, default=None, help="Testing only: skip lines <= this line when no cursor exists.")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--max-quarantine", type=int, default=25, help="Max single rejected log lines to quarantine before stopping without advancing cursor.")
     args = parser.parse_args()
 
     entries, state = collect_lines(args.first_run_days, args.baseline_line)
-    result = send(entries, state, args.chunk_size, args.dry_run)
+    result = send(entries, state, args.chunk_size, args.dry_run, args.max_quarantine)
     if result["allOk"] and not args.dry_run:
         write_state(state)
     print(json.dumps(result, ensure_ascii=False, indent=2))
