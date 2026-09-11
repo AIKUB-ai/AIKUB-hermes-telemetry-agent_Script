@@ -20,13 +20,16 @@ Cadence cible :
 |---|---:|---|
 | AIKUB Telemetry Light | aux 2h | inventaire + logs incrémentaux seulement |
 | AIKUB Telemetry Sessions | 1x/jour à `30 3 * * *` | sessions/messages seulement |
+| AIKUB Bot Backup Daily | 1x/jour à `10 4 * * *` | archive `.tar.gz` des dossiers bot + `.env` configurés |
 
 Règles d'exécution :
 
 - Si ce run provient du cron régulier/light : exécute seulement l'inventaire et les logs. N'exécute pas `scripts/aikub_telemetry_sessions_snapshot.py`.
 - Si ce run provient du cron quotidien sessions : exécute seulement `scripts/aikub_telemetry_sessions_snapshot.py`. N'envoie pas l'inventaire/logs dans ce run.
+- Si ce run provient du cron backup : exécute seulement `scripts/aikub_bot_backup_upload.py`. N'envoie pas l'inventaire/logs/sessions dans ce run.
 - Si tu découvres que le cron quotidien sessions n'existe pas encore, crée-le une seule fois de façon idempotente, avec le nom exact `AIKUB Telemetry Sessions`, l'horaire `30 3 * * *`, et un prompt qui demande uniquement d'exécuter le script sessions après auto-update.
-- Si tu découvres que le cron light contient encore l'étape sessions, édite son prompt pour retirer l'envoi sessions et garder seulement inventaire + logs.
+- Si tu découvres que le cron quotidien backup n'existe pas encore, crée-le une seule fois de façon idempotente, avec le nom exact `AIKUB Bot Backup Daily`, l'horaire `10 4 * * *`, et un prompt qui demande uniquement d'exécuter le script backup après auto-update.
+- Si tu découvres que le cron light contient encore l'étape sessions ou backup, édite son prompt pour retirer l'envoi sessions/backup et garder seulement inventaire + logs.
 
 Commande Hermes recommandée pour créer le cron sessions si absent :
 
@@ -45,6 +48,17 @@ hermes cron list
 
 Ne crée jamais de doublon si `AIKUB Telemetry Sessions` existe déjà.
 
+Commande Hermes recommandée pour créer le cron backup si absent :
+
+```bash
+hermes cron create '10 4 * * *' \
+  --name 'AIKUB Bot Backup Daily' \
+  --deliver local \
+  "Auto-update le repo/script AIKUB telemetry, puis exécute seulement scripts/aikub_bot_backup_upload.py pour envoyer le backup quotidien et les .env configurés vers AIKUB ERP/BotOps. Ne lance pas l'inventaire/logs/sessions dans ce cron."
+```
+
+Ne crée jamais de doublon si `AIKUB Bot Backup Daily` existe déjà.
+
 ## 1. Lis seulement URL + token bot
 
 Les seules variables requises dans ton `.env` sont :
@@ -61,8 +75,15 @@ Variables optionnelles seulement pour enrichir le payload local si elles existen
 ```env
 AIKUB_TELEMETRY_BOT_ID=...
 AIKUB_TELEMETRY_SOURCE=hermes
+AIKUB_BACKUP_BOT_SLUG=... # optionnel; fallback AIKUB_TELEMETRY_BOT_ID/hostname
+AIKUB_BACKUP_PATHS=~/.hermes,/home/bot/app/data
+AIKUB_BACKUP_ENV_FILES=.env,~/.hermes/.env
+AIKUB_BACKUP_INCLUDE_ENV=1
+AIKUB_BACKUP_TYPE=daily
+AIKUB_BACKUP_EXCLUDES=.git,node_modules,.venv,__pycache__,tmp,cache
 ```
 
+Règle spéciale backup/env : `scripts/aikub_bot_backup_upload.py` peut inclure les fichiers `.env` configurés dans l'archive pendant la phase temporaire, mais il ne doit jamais afficher leur contenu dans la conversation ou les logs.
 Règles :
 
 - Ne demande pas de variable supplémentaire.
@@ -309,7 +330,33 @@ Tu ne dois pas envoyer :
 fileInventory, fileCount, returnedCount, skippedCount, byExtension, items de fichiers
 ```
 
-## 9. Envoie un seul event à AIKUB_Telemetry
+## 9. Backup quotidien des dossiers + `.env`
+
+Quand le run est le cron `AIKUB Bot Backup Daily`, exécute seulement :
+
+```bash
+cd /path/to/aikub-hermes-telemetry-agent
+python3 scripts/aikub_bot_backup_upload.py
+```
+
+Test sans upload :
+
+```bash
+python3 scripts/aikub_bot_backup_upload.py --dry-run
+```
+
+Le script :
+
+- lit `AIKUB_TELEMETRY_BASE_URL` et `AIKUB_TELEMETRY_BOTOPS_TOKEN` depuis `.env` / `~/.env` / `~/.hermes/.env`;
+- utilise `AIKUB_BACKUP_PATHS` si configuré, sinon prend les fichiers/dossiers Hermes locaux standards qui existent;
+- inclut les `.env` listés dans `AIKUB_BACKUP_ENV_FILES` si `AIKUB_BACKUP_INCLUDE_ENV=1`;
+- crée une archive `.tar.gz` avec `manifest.json`;
+- upload vers `/v1/backups/uploads/start`, puis `/v1/backups/uploads/{runId}/chunk`, puis `/v1/backups/uploads/{runId}/complete`;
+- log seulement metadata/checksum/taille, jamais le contenu du `.env` ni le token.
+
+Pour l'instant, les `.env` sont en clair dans l'archive si `AIKUB_BACKUP_INCLUDE_ENV=1`. C'est volontaire pour la phase temporaire. Les archives ERP doivent être traitées comme sensibles.
+
+## 10. Envoie un seul event à AIKUB_Telemetry
 
 Endpoint :
 
