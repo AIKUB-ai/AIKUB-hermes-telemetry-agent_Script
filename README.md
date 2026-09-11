@@ -105,6 +105,10 @@ Le bot envoie les nouvelles lignes de :
 
 Le script est incrémental : il garde un curseur local et envoie seulement les nouvelles lignes depuis le dernier envoi. Le ERP doit append/dédupliquer les lignes reçues et ne jamais supprimer les anciennes quand un nouveau batch arrive.
 
+Avant l'envoi, le script nettoie les caractères de contrôle invalides (`NUL`/`\x00` et autres bytes non imprimables) puis redactionne les secrets. Une ligne de log corrompue ne doit pas faire planter tout le batch avec un `500 INTERNAL_ERROR` côté backend.
+
+Si un wrapper shell local lance inventaire + logs avec `set -e`, il doit traiter l'étape logs comme non bloquante pour le reste du cron light. Exemple : `if ! python3 scripts/aikub_telemetry_logs_incremental.py --first-run-days 3 --chunk-size 250; then echo "WARN: logs snapshot failed; continuing" >&2; fi`.
+
 Le rendu ERP doit afficher exactement :
 
 ```text

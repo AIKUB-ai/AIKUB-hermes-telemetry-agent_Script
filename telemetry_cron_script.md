@@ -26,6 +26,7 @@ Cadence cible :
 Règles d'exécution :
 
 - Si ce run provient du cron régulier/light : exécute seulement l'inventaire et les logs. N'exécute pas `scripts/aikub_telemetry_sessions_snapshot.py`.
+- Dans le cron régulier/light, l'inventaire doit rester indépendant des logs. Si les logs retournent une erreur API temporaire, note un warning mais ne considère pas que tout le cron est mort; le prochain run doit continuer à envoyer l'inventaire et réessayer les logs.
 - Si ce run provient du cron quotidien sessions : exécute seulement `scripts/aikub_telemetry_sessions_snapshot.py`. N'envoie pas l'inventaire/logs dans ce run.
 - Si ce run provient du cron backup : exécute seulement `scripts/aikub_bot_backup_upload.py`. N'envoie pas l'inventaire/logs/sessions dans ce run.
 - Si tu découvres que le cron quotidien sessions n'existe pas encore, crée-le une seule fois de façon idempotente, avec le nom exact `AIKUB Telemetry Sessions`, l'horaire `30 3 * * *`, et un prompt qui demande uniquement d'exécuter le script sessions après auto-update.
@@ -476,6 +477,17 @@ Le script doit envoyer seulement les nouvelles lignes depuis le dernier envoi gr
 
 ```text
 ~/.hermes/aikub_telemetry_state/logs_agent_log.json
+```
+
+Avant de bâtir le payload, le script doit supprimer les caractères de contrôle invalides dans chaque ligne (`NUL`/`\x00` et autres caractères non imprimables, sauf `\n`, `\r`, `\t`) puis appliquer la redaction des secrets. Ça évite qu'une seule ligne corrompue fasse répondre `500 INTERNAL_ERROR` au backend et bloque le curseur logs pendant plusieurs jours.
+
+Si un bot a encore un wrapper local `run_telemetry.sh` avec `set -euo pipefail`, l'appel logs doit être gardé comme ceci pour éviter qu'un échec logs bloque les autres étapes light :
+
+```bash
+echo "AIKUB Telemetry: sending logs snapshot"
+if ! python3 scripts/aikub_telemetry_logs_incremental.py --first-run-days 3 --chunk-size 250; then
+  echo "WARN: logs snapshot failed; continuing light telemetry" >&2
+fi
 ```
 
 Le payload logs doit être sous :

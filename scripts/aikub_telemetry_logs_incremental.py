@@ -7,6 +7,7 @@ Behavior:
 - Splits transport into chunks to avoid oversized API payloads.
 - Chunks are NOT duplicates; they are pages from the same logical snapshot.
 - Redacts secret-like values before sending.
+- Removes invalid control characters before sending so one NUL byte cannot poison the API/DB payload.
 """
 
 from __future__ import annotations
@@ -43,7 +44,16 @@ def load_base_logger():
     return module
 
 
+def sanitize_control_chars(text: str) -> str:
+    """Remove characters that break JSON/DB ingestion while preserving readable logs."""
+    text = str(text).replace("\x00", "")
+    return "".join(ch if (ch in "\n\r\t" or ord(ch) >= 32) else " " for ch in text)
+
+
 def redact(text: str) -> str:
+    # Postgres JSON rejects NUL bytes; sanitize before redaction so one bad log
+    # line cannot poison the whole incremental telemetry cursor forever.
+    text = sanitize_control_chars(text)
     for pattern, repl in SECRET_PATTERNS:
         text = pattern.sub(repl, text)
     return text

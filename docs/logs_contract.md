@@ -33,6 +33,17 @@ AIKUB_TELEMETRY_BOTOPS_TOKEN=...
 
 Aucun secret ne doit être affiché ou committé.
 
+## Nettoyage anti-500
+
+Avant l'envoi, chaque ligne doit être nettoyée comme dans le script sessions :
+
+- supprimer les bytes `NUL` / `\x00`;
+- remplacer les autres caractères de contrôle non imprimables par un espace;
+- garder seulement `\n`, `\r`, `\t` parmi les caractères de contrôle;
+- appliquer ensuite la redaction des secrets.
+
+But : éviter qu'une seule ligne corrompue de `agent.log` fasse répondre `500 INTERNAL_ERROR` au backend et laisse le curseur logs bloqué sur le même chunk.
+
 ## Endpoint
 
 ```text
