@@ -51,6 +51,32 @@ Le cron régulier envoie seulement :
 
 Il ne doit pas envoyer les sessions.
 
+### Auto-update / réparation de l'agent telemetry
+
+La stratégie officielle est : **chaque cron utilise une copie locale stable**, mais il commence par la mettre à jour depuis GitHub. Si le dossier local n'est pas un vrai repo Git, le bot doit le réparer au lieu de continuer sur une vieille copie.
+
+Au début du cron, le bot doit :
+
+1. utiliser `git fetch && git reset --hard origin/main` si `~/.hermes/aikub_telemetry_agent/.git` existe;
+2. sinon sauvegarder `~/.hermes/aikub_telemetry_agent` avec un suffixe `.old_TIMESTAMP`;
+3. refaire un `git clone` propre;
+4. recopier seulement les fichiers locaux nécessaires comme `.env` et `logs/`, sans afficher leur contenu;
+5. afficher `git log -1 --oneline` pour confirmer la version.
+
+Le repo contient aussi un helper idempotent :
+
+```bash
+bash scripts/aikub_telemetry_self_update.sh
+```
+
+Le script fait :
+
+- `git fetch/reset` si le dossier est déjà un repo Git;
+- sauvegarde + `git clone` si le dossier n'est pas un repo Git;
+- préserve `.env`, `logs/` et fichiers d'état locaux sans afficher leur contenu.
+
+Si `git clone/fetch` échoue par auth/réseau, le bot doit rapporter l'erreur Git sans montrer de credential. Il ne doit pas prétendre être à jour s'il roule encore une copie sans `.git`.
+
 ### Cron sessions, 1x/jour à 03:30
 
 Le cron sessions envoie seulement `bot_sessions_snapshot` depuis `~/.hermes/state.db`. Il ne doit pas envoyer l'inventaire ni les logs.

@@ -13,6 +13,49 @@ Ne log rien d'autre pour l'instant.
 
 ## 0. Séparation obligatoire des crons
 
+### 0.1 Auto-update obligatoire au début de chaque cron
+
+Avant d'exécuter n'importe quel cron AIKUB telemetry, commence toujours par rendre `~/.hermes/aikub_telemetry_agent` à jour. La stratégie officielle est : garder une copie locale stable, mais la réparer automatiquement si elle n'est pas un vrai repo Git.
+
+Exécute cette logique au début du cron :
+
+```bash
+AGENT_DIR="$HOME/.hermes/aikub_telemetry_agent"
+REPO_URL="${AIKUB_TELEMETRY_REPO_URL:-https://github.com/AIKUB-ai/AIKUB-hermes-telemetry-agent_Script.git}"
+BRANCH="${AIKUB_TELEMETRY_REPO_BRANCH:-main}"
+
+mkdir -p "$HOME/.hermes"
+
+if [ -d "$AGENT_DIR/.git" ]; then
+  echo "AIKUB telemetry update: git checkout"
+  cd "$AGENT_DIR"
+  git fetch origin "$BRANCH"
+  git reset --hard "origin/$BRANCH"
+elif [ -d "$AGENT_DIR" ]; then
+  echo "AIKUB telemetry update: repairing non-git folder"
+  TS="$(date +%Y%m%d_%H%M%S)"
+  mv "$AGENT_DIR" "$AGENT_DIR.old_$TS"
+  git clone --branch "$BRANCH" "$REPO_URL" "$AGENT_DIR"
+  [ -f "$AGENT_DIR.old_$TS/.env" ] && cp "$AGENT_DIR.old_$TS/.env" "$AGENT_DIR/.env"
+  [ -d "$AGENT_DIR.old_$TS/logs" ] && cp -a "$AGENT_DIR.old_$TS/logs" "$AGENT_DIR/logs"
+  cd "$AGENT_DIR"
+else
+  echo "AIKUB telemetry update: fresh clone"
+  git clone --branch "$BRANCH" "$REPO_URL" "$AGENT_DIR"
+  cd "$AGENT_DIR"
+fi
+
+chmod +x scripts/*.py scripts/*.sh 2>/dev/null || true
+git log -1 --oneline
+```
+
+Règles importantes :
+
+- Ne continue pas à rouler une vieille copie si `.git` est absent.
+- Ne montre jamais le contenu de `.env`, token, clé API ou password.
+- Si `git clone/fetch` échoue par auth/réseau, log seulement l'erreur Git et continue avec la copie locale seulement si elle existe déjà; sinon arrête proprement.
+- Après réparation, les prochains crons doivent passer par le chemin Git normal.
+
 Pour éviter les erreurs de lourdeur, les sessions ne doivent plus partir dans le même run que l'inventaire/logs.
 
 Cadence cible :
