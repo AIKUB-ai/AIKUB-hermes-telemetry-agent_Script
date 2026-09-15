@@ -71,25 +71,35 @@ self_update() {
 ensure_local_cron_lock() {
   local mark_start="# AIKUB_TELEMETRY_AGENT_START"
   local mark_end="# AIKUB_TELEMETRY_AGENT_END"
-  local cron_line="0 */2 * * * flock -n $INSTALL_DIR/run.lock $INSTALL_DIR/run_telemetry.sh light >> $INSTALL_DIR/logs/cron.log 2>&1"
-  local current
+  local light_line="0 */2 * * * flock -n $INSTALL_DIR/run.lock $INSTALL_DIR/run_telemetry.sh light >> $INSTALL_DIR/logs/cron.log 2>&1"
+  local sessions_line="30 3 * * * flock -n $INSTALL_DIR/sessions.lock $INSTALL_DIR/run_telemetry.sh sessions >> $INSTALL_DIR/logs/cron.log 2>&1"
+  local current filtered
 
   if ! command -v crontab >/dev/null 2>&1; then
     return 0
   fi
 
   current="$(crontab -l 2>/dev/null || true)"
-  if printf "%s\n" "$current" | grep -Fq "$cron_line"; then
+  if printf "%s\n" "$current" | grep -Fq "$light_line" && printf "%s\n" "$current" | grep -Fq "$sessions_line"; then
     return 0
   fi
 
+  filtered="$({
+    printf "%s\n" "$current" \
+      | sed "/$mark_start/,/$mark_end/d" \
+      | grep -vF "$INSTALL_DIR/run_telemetry.sh" \
+      | grep -vF "$INSTALL_DIR/scripts/aikub_telemetry_sessions_snapshot.py" \
+      || true
+  } )"
+
   (
-    printf "%s\n" "$current" | sed "/$mark_start/,/$mark_end/d"
+    printf "%s\n" "$filtered" | sed '/^[[:space:]]*$/d'
     echo "$mark_start"
-    echo "$cron_line"
+    echo "$light_line"
+    echo "$sessions_line"
     echo "$mark_end"
   ) | crontab -
-  echo "AIKUB Telemetry: light cron lock repaired to $INSTALL_DIR/run.lock"
+  echo "AIKUB Telemetry: Linux crons repaired: light aux 2h + sessions daily"
 }
 
 run_light() {

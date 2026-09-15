@@ -47,5 +47,41 @@ fi
 
 chmod +x run_telemetry.sh scripts/*.py scripts/*.sh 2>/dev/null || true
 
+ensure_system_crons() {
+  local mark_start="# AIKUB_TELEMETRY_AGENT_START"
+  local mark_end="# AIKUB_TELEMETRY_AGENT_END"
+  local current filtered
+  local light_line="0 */2 * * * flock -n ${AGENT_DIR}/run.lock ${AGENT_DIR}/run_telemetry.sh light >> ${AGENT_DIR}/logs/cron.log 2>&1"
+  local sessions_line="30 3 * * * flock -n ${AGENT_DIR}/sessions.lock ${AGENT_DIR}/run_telemetry.sh sessions >> ${AGENT_DIR}/logs/cron.log 2>&1"
+
+  if ! command -v crontab >/dev/null 2>&1; then
+    echo "WARN: crontab command missing; cannot repair Linux crons" >&2
+    return 0
+  fi
+
+  current="$(crontab -l 2>/dev/null || true)"
+  filtered="$({
+    printf "%s\n" "$current" \
+      | sed "/$mark_start/,/$mark_end/d" \
+      | grep -vF "${AGENT_DIR}/run_telemetry.sh" \
+      | grep -vF "${AGENT_DIR}/scripts/aikub_telemetry_sessions_snapshot.py" \
+      || true
+  } )"
+
+  {
+    printf "%s\n" "$filtered" | sed '/^[[:space:]]*$/d'
+    echo "$mark_start"
+    echo "$light_line"
+    echo "$sessions_line"
+    echo "$mark_end"
+  } | crontab -
+
+  echo "crons=installed_or_repaired"
+  echo "cron_light=${light_line}"
+  echo "cron_sessions=${sessions_line}"
+}
+
+ensure_system_crons
+
 echo "commit=$(git log -1 --oneline)"
 echo "ok=true"
