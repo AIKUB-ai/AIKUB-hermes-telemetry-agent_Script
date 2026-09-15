@@ -62,15 +62,15 @@ Cadence cible :
 
 | Cron | Fréquence | Contenu |
 |---|---:|---|
-| AIKUB Telemetry Light | aux 2h | inventaire + logs incrémentaux seulement |
+| AIKUB Telemetry Light | aux 2h | tout le light: inventaire/modèle/Codex/accounts/crons/plugins/skills + logs incrémentaux seulement |
 | AIKUB Telemetry Sessions | 1x/jour à `30 3 * * *` | sessions/messages seulement |
 | AIKUB Bot Backup Daily | 1x/jour à `10 4 * * *` | archive `.tar.gz` des dossiers bot + `.env` configurés |
 
 Règles d'exécution :
 
-- Si ce run provient du cron régulier/light : exécute seulement l'inventaire et les logs. N'exécute pas `scripts/aikub_telemetry_sessions_snapshot.py`.
+- Si ce run provient du cron régulier/light : exécute `./run_telemetry.sh light`, ou équivalent direct inventaire/light + logs. N'exécute pas `scripts/aikub_telemetry_sessions_snapshot.py`.
 - Dans le cron régulier/light, l'inventaire doit rester indépendant des logs. Si les logs retournent une erreur API temporaire, note un warning mais ne considère pas que tout le cron est mort; le prochain run doit continuer à envoyer l'inventaire et réessayer les logs.
-- Si ce run provient du cron quotidien sessions : exécute seulement `scripts/aikub_telemetry_sessions_snapshot.py`. N'envoie pas l'inventaire/logs dans ce run.
+- Si ce run provient du cron quotidien sessions : exécute `./run_telemetry.sh sessions`, ou seulement `scripts/aikub_telemetry_sessions_snapshot.py`. N'envoie pas l'inventaire, les logs, Codex/accounts, modèle, plugins ni aucun autre event light dans ce run.
 - Si ce run provient du cron backup : exécute seulement `scripts/aikub_bot_backup_upload.py`. N'envoie pas l'inventaire/logs/sessions dans ce run.
 - Si tu découvres que le cron quotidien sessions n'existe pas encore, crée-le une seule fois de façon idempotente, avec le nom exact `AIKUB Telemetry Sessions`, l'horaire `30 3 * * *`, et un prompt qui demande uniquement d'exécuter le script sessions après auto-update.
 - Si tu découvres que le cron quotidien backup n'existe pas encore, crée-le une seule fois de façon idempotente, avec le nom exact `AIKUB Bot Backup Daily`, l'horaire `10 4 * * *`, et un prompt qui demande uniquement d'exécuter le script backup après auto-update.
@@ -82,7 +82,7 @@ Commande Hermes recommandée pour créer le cron sessions si absent :
 hermes cron create '30 3 * * *' \
   --name 'AIKUB Telemetry Sessions' \
   --deliver local \
-  "Auto-update le repo/script AIKUB telemetry, puis exécute seulement scripts/aikub_telemetry_sessions_snapshot.py pour envoyer bot_sessions_snapshot. Ne lance pas l'inventaire ni logs dans ce cron."
+  "Auto-update le repo/script AIKUB telemetry, puis exécute ~/.hermes/aikub_telemetry_agent/run_telemetry.sh sessions. Ce cron sessions doit envoyer seulement bot_sessions_snapshot. Ne lance pas l'inventaire, les logs, Codex/accounts, modèle, plugins ni aucun autre event light dans ce cron."
 ```
 
 Avant de créer, vérifie avec :
@@ -497,7 +497,7 @@ Exceptions figées :
 6. Découvrir localement seulement tes plugins Hermes enabled/actifs.
 7. Construire un JSON avec seulement les champs racine acceptés par AIKUB_Telemetry.
 8. Mettre tout l'inventaire dans `payload`.
-9. Envoyer un seul `bot_inventory_snapshot` à AIKUB_Telemetry.
+9. Envoyer un seul `bot_inventory_snapshot` à AIKUB_Telemetry avec tout le contenu light: identité, modèle, Codex/accounts si détectés, crons, plugins, skills, etc.
 10. Ne rien logger d'autre dans l'event d'inventaire.
 11. Exécuter `scripts/aikub_telemetry_logs_incremental.py` pour envoyer les nouvelles lignes de logs.
 12. Ne pas exécuter `scripts/aikub_telemetry_sessions_snapshot.py` dans ce cron light.

@@ -45,7 +45,7 @@ else
   cd "${AGENT_DIR}"
 fi
 
-chmod +x scripts/*.py scripts/*.sh 2>/dev/null || true
+chmod +x run_telemetry.sh scripts/*.py scripts/*.sh 2>/dev/null || true
 
 echo "commit=$(git log -1 --oneline)"
 echo "ok=true"

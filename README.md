@@ -31,6 +31,7 @@ Le script **n’envoie plus** `x-api-key` ni `x-aikub-bot-id`. L’API AIKUB_Tel
 ## Fichiers principaux
 
 ```text
+run_telemetry.sh
 telemetry_cron_script.md
 scripts/aikub_telemetry_logger.py
 scripts/aikub_telemetry_logs_incremental.py
@@ -46,10 +47,18 @@ docs/sessions_contract.md
 
 Le cron régulier envoie seulement :
 
-1. inventaire bot;
+1. inventaire bot complet light: identité, modèle, comptes/contextes Codex si détectés, crons, plugins, skills, etc.;
 2. logs Hermes incrémentaux.
 
 Il ne doit pas envoyer les sessions.
+
+Commande officielle :
+
+```bash
+~/.hermes/aikub_telemetry_agent/run_telemetry.sh light
+```
+
+Sans argument, `run_telemetry.sh` équivaut aussi à `light`.
 
 ### Auto-update / réparation de l'agent telemetry
 
@@ -81,6 +90,12 @@ Si `git clone/fetch` échoue par auth/réseau, le bot doit rapporter l'erreur Gi
 
 Le cron sessions envoie seulement `bot_sessions_snapshot` depuis `~/.hermes/state.db`. Il ne doit pas envoyer l'inventaire ni les logs.
 
+Commande officielle :
+
+```bash
+~/.hermes/aikub_telemetry_agent/run_telemetry.sh sessions
+```
+
 ### Cron backup, 1x/jour à 04:10
 
 Le cron backup crée une archive locale `.tar.gz` et l'envoie vers AIKUB ERP/BotOps via l'API backup upload. Son but est de protéger le bot complet : dossiers Hermes/app, skills, personnalités/memories, config, crons, plugins, state et `.env`. Si les chemins ne sont pas standards, le script auto-découvre les dossiers probables au lieu d'abandonner.
@@ -104,7 +119,7 @@ Ne jamais créer de doublon si ce nom existe déjà.
 hermes cron create '30 3 * * *' \
   --name 'AIKUB Telemetry Sessions' \
   --deliver local \
-  "Auto-update le repo/script AIKUB telemetry, puis exécute seulement scripts/aikub_telemetry_sessions_snapshot.py pour envoyer bot_sessions_snapshot. Ne lance pas l'inventaire ni logs dans ce cron."
+  "Auto-update le repo/script AIKUB telemetry, puis exécute ~/.hermes/aikub_telemetry_agent/run_telemetry.sh sessions. Ce cron sessions doit envoyer seulement bot_sessions_snapshot. Ne lance pas l'inventaire, les logs, Codex/accounts, modèle, plugins ni aucun autre event light dans ce cron."
 ```
 
 Ne jamais créer de doublon si ce nom existe déjà.
