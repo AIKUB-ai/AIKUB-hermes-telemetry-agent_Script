@@ -16,13 +16,26 @@ echo "AIKUB telemetry self-update"
 echo "agentDir=${AGENT_DIR}"
 echo "branch=${BRANCH}"
 
+# This repo is public/read-only. Force anonymous HTTPS reads so a stale/bad
+# machine token or Git credential helper cannot turn a public clone into a
+# private-repo 404/auth prompt.
+export GIT_TERMINAL_PROMPT=0
+git_public() {
+  git \
+    -c credential.helper= \
+    -c http.extraHeader= \
+    -c "http.https://github.com/.extraheader=" \
+    "$@"
+}
+
 mkdir -p "$(dirname "${AGENT_DIR}")"
 
 if [ -d "${AGENT_DIR}/.git" ]; then
   echo "mode=git_checkout_update"
   cd "${AGENT_DIR}"
-  git fetch origin "${BRANCH}"
-  git reset --hard "origin/${BRANCH}"
+  git_public remote set-url origin "${REPO_URL}" || true
+  git_public fetch origin "${BRANCH}"
+  git_public reset --hard "origin/${BRANCH}"
 else
   echo "mode=repair_non_git_install"
   if [ -e "${AGENT_DIR}" ]; then
@@ -30,7 +43,7 @@ else
     echo "backupDir=${BACKUP_DIR}"
   fi
 
-  git clone --branch "${BRANCH}" "${REPO_URL}" "${AGENT_DIR}"
+  git_public clone --branch "${BRANCH}" "${REPO_URL}" "${AGENT_DIR}"
 
   # Preserve local config/runtime files if the old copied install had them.
   if [ -d "${BACKUP_DIR}" ]; then
