@@ -30,6 +30,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import re
@@ -228,6 +229,115 @@ def discover_crons(home: Path) -> list[dict[str, Any]]:
     return safe_jobs
 
 
+def _decode_jwt_payload(token: str) -> dict[str, Any]:
+    """Decode non-secret JWT claims only. Never return the raw token."""
+    parts = token.split(".")
+    if len(parts) < 2:
+        return {}
+    try:
+        payload = parts[1] + "=" * ((4 - len(parts[1]) % 4) % 4)
+        data = json.loads(base64.urlsafe_b64decode(payload.encode("utf-8")))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _visible_email(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    value = value.strip()
+    if not value or len(value) > 254:
+        return ""
+    if re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", value):
+        return value
+    return ""
+
+
+def _credential_email(credential: dict[str, Any]) -> tuple[str, str]:
+    """Return (email, source) only when an email is explicitly visible/provable."""
+    for key in ("email", "account_email", "accountEmail", "username", "user", "login"):
+        email = _visible_email(credential.get(key))
+        if email:
+            return email, f"auth_json.{key}"
+
+    for token_key in ("id_token", "access_token"):
+        token = credential.get(token_key)
+        if not isinstance(token, str) or not token:
+            continue
+        claims = _decode_jwt_payload(token)
+        for claim in ("email", "preferred_username", "upn"):
+            email = _visible_email(claims.get(claim))
+            if email:
+                return email, f"{token_key}.jwt.{claim}"
+
+    override = _visible_email(os.getenv("AIKUB_CODEX_ACCOUNT_EMAIL")) or _visible_email(os.getenv("OPENAI_CODEX_EMAIL"))
+    if override:
+        return override, "env_override"
+    return "", "not_exposed_by_oauth_credential"
+
+
+def discover_accounts(home: Path) -> dict[str, Any]:
+    """Discover Hermes auth/account inventory without exposing tokens/secrets.
+
+    Hermes stores openai-codex device-code OAuth credentials in auth.json. On
+    current builds, that credential often has access/refresh tokens but no email
+    claim, so we report the credential as connected with emailStatus=unknown
+    instead of guessing from the Nous account email.
+    """
+    auth_file = home / "auth.json"
+    if not auth_file.exists():
+        return {"providerCount": 0, "providers": [], "source": str(auth_file), "error": "auth_json_missing"}
+    try:
+        data = json.loads(auth_file.read_text(encoding="utf-8", errors="replace"))
+    except Exception as exc:
+        return {"providerCount": 0, "providers": [], "source": str(auth_file), "error": f"auth_json_unreadable:{type(exc).__name__}"}
+
+    pool = data.get("credential_pool") if isinstance(data, dict) else None
+    if not isinstance(pool, dict):
+        pool = {}
+
+    providers: list[dict[str, Any]] = []
+    for provider, credentials in sorted(pool.items()):
+        if not isinstance(credentials, list):
+            continue
+        safe_credentials: list[dict[str, Any]] = []
+        for index, credential in enumerate(credentials, start=1):
+            if not isinstance(credential, dict):
+                continue
+            email, email_source = _credential_email(credential)
+            safe_credentials.append(
+                {
+                    "index": index,
+                    "id": credential.get("id"),
+                    "label": credential.get("label"),
+                    "authType": credential.get("auth_type"),
+                    "source": credential.get("source"),
+                    "priority": credential.get("priority"),
+                    "lastStatus": credential.get("last_status"),
+                    "baseUrl": credential.get("base_url"),
+                    "email": email or None,
+                    "emailStatus": "proven" if email else "unknown",
+                    "emailSource": email_source,
+                }
+            )
+        providers.append(
+            {
+                "name": provider,
+                "credentialCount": len(safe_credentials),
+                "connected": len(safe_credentials) > 0,
+                "credentials": safe_credentials,
+            }
+        )
+
+    return {
+        "providerCount": len(providers),
+        "activeProvider": data.get("active_provider") if isinstance(data, dict) else None,
+        "providers": providers,
+        "source": str(auth_file),
+        "secretsIncluded": False,
+    }
+
+
 def _dashboard_plugins_url() -> str:
     """Local Hermes dashboard endpoint that exposes plugins with dashboard tabs.
 
@@ -304,6 +414,7 @@ def build_payload(bot_id: str, home: Path) -> dict[str, Any]:
     skills = discover_skills(home)
     crons = discover_crons(home)
     plugins = discover_plugins(home)
+    accounts = discover_accounts(home)
     # File inventory intentionally disabled: too heavy for ERP/BotOps hourly telemetry.
     model = read_model(home)
     occurred_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -340,6 +451,7 @@ def build_payload(bot_id: str, home: Path) -> dict[str, Any]:
                 "items": crons,
             },
             "plugins": plugins,
+            "accounts": accounts,
         },
     }
 
