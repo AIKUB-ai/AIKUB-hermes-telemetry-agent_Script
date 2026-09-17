@@ -36,7 +36,6 @@ telemetry_cron_script.md
 scripts/aikub_telemetry_logger.py
 scripts/aikub_telemetry_logs_incremental.py
 scripts/aikub_telemetry_sessions_snapshot.py
-scripts/aikub_bot_backup_upload.py
 docs/logs_contract.md
 docs/sessions_contract.md
 ```
@@ -95,23 +94,6 @@ Commande officielle :
 ```bash
 ~/.hermes/aikub_telemetry_agent/run_telemetry.sh sessions
 ```
-
-### Cron backup, 1x/jour à 04:10
-
-Le cron backup crée une archive locale `.tar.gz` et l'envoie vers AIKUB ERP/BotOps via l'API backup upload. Son but est de protéger le bot complet : dossiers Hermes/app, skills, personnalités/memories, config, crons, plugins, state et `.env`. Si les chemins ne sont pas standards, le script auto-découvre les dossiers probables au lieu d'abandonner.
-
-Phase temporaire demandée: `AIKUB_BACKUP_INCLUDE_ENV=1`, donc les fichiers `.env` configurés sont inclus en clair dans l'archive. Ne jamais afficher le contenu de `.env` dans les logs; seuls les fichiers téléchargés depuis ERP doivent être traités comme sensibles.
-
-À l'auto-update, le bot doit vérifier qu'un cron nommé `AIKUB Bot Backup Daily` existe. S'il est absent, il doit le créer une seule fois :
-
-```bash
-hermes cron create '10 4 * * *' \
-  --name 'AIKUB Bot Backup Daily' \
-  --deliver local \
-  "But: protéger ce bot en envoyant chaque jour vers AIKUB ERP/BotOps une archive de ses dossiers importants, skills, personnalités/memories, config, crons, plugins, state et .env. Auto-update le repo/script AIKUB telemetry, puis exécute seulement scripts/aikub_bot_backup_upload.py. Si les chemins ne sont pas standards, laisse le script auto-découvrir HERMES_HOME/HERMES_PROFILE_DIR/~/.hermes/profils/dossiers app, ou utilise AIKUB_BACKUP_PATHS/AIKUB_BACKUP_ENV_FILES si déjà configurés. Ne lance pas l'inventaire/logs/sessions dans ce cron. Ne montre jamais le contenu .env ni le token."
-```
-
-Ne jamais créer de doublon si ce nom existe déjà.
 
 À l'auto-update, le bot doit vérifier qu'un cron nommé `AIKUB Telemetry Sessions` existe. S'il est absent, il doit le créer une seule fois :
 
@@ -207,15 +189,6 @@ Optionnelles :
 AIKUB_TELEMETRY_BOT_ID=...
 AIKUB_TELEMETRY_SOURCE=hermes
 AIKUB_TELEMETRY_API_KEY=... # alias legacy du token; éviter pour les nouvelles installs
-AIKUB_BACKUP_INCLUDE_ENV=1
-AIKUB_BACKUP_TYPE=daily
-AIKUB_BACKUP_BOT_SLUG=... # optionnel; fallback AIKUB_TELEMETRY_BOT_ID/hostname
-# AIKUB_BACKUP_PATHS=~/.hermes,/home/bot/app/data
-# AIKUB_BACKUP_DISCOVERY_ROOTS=~,.,/opt,/srv
-# AIKUB_BACKUP_DISCOVERY_MAX_DEPTH=4
-# AIKUB_BACKUP_ENV_FILES=.env,~/.hermes/.env
-AIKUB_BACKUP_EXCLUDES=.git,node_modules,.venv,__pycache__,tmp,cache,.env,*.env,.env.*
-AIKUB_BACKUP_CHUNK_BYTES=700000
 ```
 
 Les bots ne doivent pas recevoir le modèle, les skills, le display name ou les crons en `.env`. Ils doivent les découvrir eux-mêmes localement.
