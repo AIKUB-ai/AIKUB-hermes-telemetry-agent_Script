@@ -66,6 +66,7 @@ ensure_system_crons() {
   local current filtered
   local light_line="0 */2 * * * flock -n ${AGENT_DIR}/run.lock ${AGENT_DIR}/run_telemetry.sh light >> ${AGENT_DIR}/logs/cron.log 2>&1"
   local sessions_line="30 3 * * * flock -n ${AGENT_DIR}/sessions.lock ${AGENT_DIR}/run_telemetry.sh sessions >> ${AGENT_DIR}/logs/cron.log 2>&1"
+  local backup_line="10 4 * * * flock -n ${AGENT_DIR}/backup.lock bash -lc 'cd \"${AGENT_DIR}\" && python3 scripts/aikub_bot_backup_upload.py' >> ${AGENT_DIR}/logs/cron.log 2>&1"
 
   if ! command -v crontab >/dev/null 2>&1; then
     echo "WARN: crontab command missing; cannot repair Linux crons" >&2
@@ -78,6 +79,7 @@ ensure_system_crons() {
       | sed "/$mark_start/,/$mark_end/d" \
       | grep -vF "${AGENT_DIR}/run_telemetry.sh" \
       | grep -vF "${AGENT_DIR}/scripts/aikub_telemetry_sessions_snapshot.py" \
+      | grep -vF "${AGENT_DIR}/scripts/aikub_bot_backup_upload.py" \
       || true
   } )"
 
@@ -86,12 +88,14 @@ ensure_system_crons() {
     echo "$mark_start"
     echo "$light_line"
     echo "$sessions_line"
+    echo "$backup_line"
     echo "$mark_end"
   } | crontab -
 
   echo "crons=installed_or_repaired"
   echo "cron_light=${light_line}"
   echo "cron_sessions=${sessions_line}"
+  echo "cron_backup=${backup_line}"
 }
 
 ensure_system_crons
