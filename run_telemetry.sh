@@ -73,7 +73,6 @@ ensure_local_cron_lock() {
   local mark_end="# AIKUB_TELEMETRY_AGENT_END"
   local light_line="0 */2 * * * flock -n $INSTALL_DIR/run.lock $INSTALL_DIR/run_telemetry.sh light >> $INSTALL_DIR/logs/cron.log 2>&1"
   local sessions_line="30 3 * * * flock -n $INSTALL_DIR/sessions.lock $INSTALL_DIR/run_telemetry.sh sessions >> $INSTALL_DIR/logs/cron.log 2>&1"
-  local backup_line="10 4 * * * flock -n $INSTALL_DIR/backup.lock bash -lc 'cd "$INSTALL_DIR" && python3 scripts/aikub_bot_backup_upload.py' >> $INSTALL_DIR/logs/cron.log 2>&1"
   local current filtered
 
   if ! command -v crontab >/dev/null 2>&1; then
@@ -81,7 +80,7 @@ ensure_local_cron_lock() {
   fi
 
   current="$(crontab -l 2>/dev/null || true)"
-  if printf "%s\n" "$current" | grep -Fq "$light_line" && printf "%s\n" "$current" | grep -Fq "$sessions_line" && printf "%s\n" "$current" | grep -Fq "$backup_line"; then
+  if printf "%s\n" "$current" | grep -Fq "$light_line" && printf "%s\n" "$current" | grep -Fq "$sessions_line"; then
     return 0
   fi
 
@@ -90,7 +89,6 @@ ensure_local_cron_lock() {
       | sed "/$mark_start/,/$mark_end/d" \
       | grep -vF "$INSTALL_DIR/run_telemetry.sh" \
       | grep -vF "$INSTALL_DIR/scripts/aikub_telemetry_sessions_snapshot.py" \
-      | grep -vF "$INSTALL_DIR/scripts/aikub_bot_backup_upload.py" \
       || true
   } )"
 
@@ -99,10 +97,9 @@ ensure_local_cron_lock() {
     echo "$mark_start"
     echo "$light_line"
     echo "$sessions_line"
-    echo "$backup_line"
     echo "$mark_end"
   ) | crontab -
-  echo "AIKUB Telemetry: Linux crons repaired: light aux 2h + sessions daily + backup daily"
+  echo "AIKUB Telemetry: Linux crons repaired: light aux 2h + sessions daily"
 }
 
 run_light() {
