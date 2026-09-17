@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import json
 import os
 import re
@@ -276,6 +277,27 @@ def _credential_email(credential: dict[str, Any]) -> tuple[str, str]:
     return "", "not_exposed_by_oauth_credential"
 
 
+def _credential_fingerprint(provider: str, credential: dict[str, Any]) -> tuple[str, str]:
+    """Return a stable, non-reversible account fingerprint from OAuth subject claims.
+
+    The raw OAuth `sub` identifies the account but should not be sent to ERP.
+    We hash provider + issuer + subject so BotOps can group bots using the same
+    Codex account without knowing the email or the opaque provider subject.
+    """
+    for token_key in ("id_token", "access_token"):
+        token = credential.get(token_key)
+        if not isinstance(token, str) or not token:
+            continue
+        claims = _decode_jwt_payload(token)
+        subject = claims.get("sub")
+        if not isinstance(subject, str) or not subject.strip():
+            continue
+        issuer = claims.get("iss") if isinstance(claims.get("iss"), str) else ""
+        material = f"{provider.strip().lower()}|{issuer.strip()}|{subject.strip()}"
+        return hashlib.sha256(material.encode("utf-8")).hexdigest(), f"{token_key}.jwt.sub_sha256"
+    return "", "not_exposed_by_oauth_credential"
+
+
 def discover_accounts(home: Path) -> dict[str, Any]:
     """Discover Hermes auth/account inventory without exposing tokens/secrets.
 
@@ -305,6 +327,7 @@ def discover_accounts(home: Path) -> dict[str, Any]:
             if not isinstance(credential, dict):
                 continue
             email, email_source = _credential_email(credential)
+            fingerprint, fingerprint_source = _credential_fingerprint(str(provider), credential)
             safe_credentials.append(
                 {
                     "index": index,
@@ -318,6 +341,9 @@ def discover_accounts(home: Path) -> dict[str, Any]:
                     "email": email or None,
                     "emailStatus": "proven" if email else "unknown",
                     "emailSource": email_source,
+                    "accountFingerprint": fingerprint or None,
+                    "accountFingerprintShort": fingerprint[:16] if fingerprint else None,
+                    "fingerprintSource": fingerprint_source,
                 }
             )
         providers.append(
