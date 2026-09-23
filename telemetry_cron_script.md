@@ -1,6 +1,6 @@
 # AIKUB Telemetry Cron Script - Workflow Vault token-only
 
-Tu es un bot Hermes/Aikub. Ce fichier est le script d'instructions que tu lis à chaque fois que ton cron de self-logging est actif.
+Ce fichier décrit le contrat de collecte Hermes/Aikub exécuté par les scripts sous cron Linux natif. Ce n'est pas un prompt à exécuter par un agent à chaque déclenchement.
 
 Objectif des étapes figées :
 
@@ -12,82 +12,43 @@ Ne log rien d'autre pour l'instant.
 
 ## 0. Séparation obligatoire des crons
 
-### 0.1 Auto-update obligatoire au début de chaque cron
+### 0.1 Installation explicite des crons Linux
 
-Avant d'exécuter n'importe quel cron AIKUB telemetry, commence toujours par rendre `~/.hermes/aikub_telemetry_agent` à jour. La stratégie officielle est : garder une copie locale stable, mais la réparer automatiquement si elle n'est pas un vrai repo Git.
-
-Exécute cette logique au début du cron :
+La planification officielle utilise **cron Linux natif**, sans invocation d'agent/LLM ni prompt Hermes. Depuis le dossier d'installation, utiliser uniquement :
 
 ```bash
-AGENT_DIR="$HOME/.hermes/aikub_telemetry_agent"
-REPO_URL="${AIKUB_TELEMETRY_REPO_URL:-https://github.com/AIKUB-ai/AIKUB-hermes-telemetry-agent_Script.git}"
-BRANCH="${AIKUB_TELEMETRY_REPO_BRANCH:-main}"
-
-mkdir -p "$HOME/.hermes"
-
-if [ -d "$AGENT_DIR/.git" ]; then
-  echo "AIKUB telemetry update: git checkout"
-  cd "$AGENT_DIR"
-  git fetch origin "$BRANCH"
-  git reset --hard "origin/$BRANCH"
-elif [ -d "$AGENT_DIR" ]; then
-  echo "AIKUB telemetry update: repairing non-git folder"
-  TS="$(date +%Y%m%d_%H%M%S)"
-  mv "$AGENT_DIR" "$AGENT_DIR.old_$TS"
-  git clone --branch "$BRANCH" "$REPO_URL" "$AGENT_DIR"
-  [ -f "$AGENT_DIR.old_$TS/.env" ] && cp "$AGENT_DIR.old_$TS/.env" "$AGENT_DIR/.env"
-  [ -d "$AGENT_DIR.old_$TS/logs" ] && cp -a "$AGENT_DIR.old_$TS/logs" "$AGENT_DIR/logs"
-  cd "$AGENT_DIR"
-else
-  echo "AIKUB telemetry update: fresh clone"
-  git clone --branch "$BRANCH" "$REPO_URL" "$AGENT_DIR"
-  cd "$AGENT_DIR"
-fi
-
-chmod +x scripts/*.py scripts/*.sh 2>/dev/null || true
-git log -1 --oneline
+./run_telemetry.sh install-cron
 ```
+
+Cette commande est idempotente et installe les deux entrées Linux. Le bot ne doit ni créer ni modifier automatiquement des crons Hermes, y compris lors d'une collecte ou d'un auto-update.
+
+**Migration :** l'opérateur doit désactiver explicitement les anciens crons Hermes de télémétrie pour éviter les doublons. L'installateur ne les modifie pas. Ne pas conserver les deux planifications actives.
+
+### 0.2 Auto-update au début de chaque collecte
+
+Le runner conserve une copie locale stable et tente sa mise à jour via `scripts/aikub_telemetry_self_update.sh` avant chaque collecte. Utiliser ce helper pour la mise à jour Git ou la réparation d'une installation non Git, sans recopier une deuxième procédure shell dans un prompt.
 
 Règles importantes :
 
-- Ne continue pas à rouler une vieille copie si `.git` est absent.
 - Ne montre jamais le contenu de `.env`, token, clé API ou password.
-- Si `git clone/fetch` échoue par auth/réseau, log seulement l'erreur Git et continue avec la copie locale seulement si elle existe déjà; sinon arrête proprement.
-- Après réparation, les prochains crons doivent passer par le chemin Git normal.
+- Si la mise à jour échoue par auth/réseau, signale l'échec sans credential et continue seulement avec une copie locale exploitable; sinon arrête proprement.
+- Ne prétends pas que la copie locale est à jour après un échec de mise à jour.
+- L'auto-update ne remplace pas l'installation explicite via `install-cron`.
 
 Pour éviter les erreurs de lourdeur, les sessions ne doivent plus partir dans le même run que l'inventaire/logs.
 
-Cadence cible :
+Cadence cible (fuseau horaire du cron système) :
 
-| Cron | Fréquence | Contenu |
+| Cron Linux | Fréquence | Contenu |
 |---|---:|---|
-| AIKUB Telemetry Light | aux 2h | tout le light: inventaire/modèle/Codex/accounts/crons/plugins/skills + logs incrémentaux seulement |
-| AIKUB Telemetry Sessions | 1x/jour à `30 3 * * *` | sessions/messages seulement |
+| AIKUB Telemetry Light | aux 2h à `0 */2 * * *` | inventaire/modèle/provider/crons/plugins/skills + logs incrémentaux seulement |
+| AIKUB Telemetry Sessions | 1x/jour à `30 3 * * *` | snapshot complet sessions/messages seulement |
 
 Règles d'exécution :
 
-- Si ce run provient du cron régulier/light : exécute `./run_telemetry.sh light`, ou équivalent direct inventaire/light + logs. N'exécute pas `scripts/aikub_telemetry_sessions_snapshot.py`.
+- Le cron régulier/light exécute `./run_telemetry.sh light`. N'exécute pas `scripts/aikub_telemetry_sessions_snapshot.py` dans ce run.
 - Dans le cron régulier/light, l'inventaire doit rester indépendant des logs. Si les logs retournent une erreur API temporaire, note un warning mais ne considère pas que tout le cron est mort; le prochain run doit continuer à envoyer l'inventaire et réessayer les logs.
-- Si ce run provient du cron quotidien sessions : exécute `./run_telemetry.sh sessions`, ou seulement `scripts/aikub_telemetry_sessions_snapshot.py`. N'envoie pas l'inventaire, les logs, Codex/accounts, modèle, plugins ni aucun autre event light dans ce run.
-- Si tu découvres que le cron quotidien sessions n'existe pas encore, crée-le une seule fois de façon idempotente, avec le nom exact `AIKUB Telemetry Sessions`, l'horaire `30 3 * * *`, et un prompt qui demande uniquement d'exécuter le script sessions après auto-update.
-- Si tu découvres que le cron light contient encore l'étape sessions, édite son prompt pour retirer l'envoi sessions et garder seulement inventaire + logs.
-
-Commande Hermes recommandée pour créer le cron sessions si absent :
-
-```bash
-hermes cron create '30 3 * * *' \
-  --name 'AIKUB Telemetry Sessions' \
-  --deliver local \
-  "Auto-update le repo/script AIKUB telemetry, puis exécute ~/.hermes/aikub_telemetry_agent/run_telemetry.sh sessions. Ce cron sessions doit envoyer seulement bot_sessions_snapshot. Ne lance pas l'inventaire, les logs, Codex/accounts, modèle, plugins ni aucun autre event light dans ce cron."
-```
-
-Avant de créer, vérifie avec :
-
-```bash
-hermes cron list
-```
-
-Ne crée jamais de doublon si `AIKUB Telemetry Sessions` existe déjà.
+- Le cron quotidien sessions exécute `./run_telemetry.sh sessions`. N'envoie pas l'inventaire, les logs, le modèle, les plugins ni aucun autre event light dans ce run.
 
 ## 1. Lis seulement URL + token bot
 
@@ -114,7 +75,7 @@ Règles :
 - Ne demande pas `AIKUB_BOT_MODEL_PROVIDER`.
 - Ne demande pas `AIKUB_BOT_MODEL_NAME`.
 - Ne demande pas `AIKUB_BOT_SKILLS_JSON`.
-- Ne lis jamais la base de données directement.
+- Ne lis ni n'écris directement dans la DB ERP/telemetry; passe par l'API. La lecture de la DB locale Hermes `~/.hermes/state.db` est autorisée pour le snapshot sessions.
 - N'affiche jamais le token; si tu dois montrer la config, écris `[REDACTED]`.
 - N'envoie pas `x-api-key` ni `x-aikub-bot-id`.
 - Envoie seulement `x-aikub-botops-token`; l’API résout le bot via Vault.
@@ -353,7 +314,9 @@ Tu ne dois pas envoyer :
 fileInventory, fileCount, returnedCount, skippedCount, byExtension, items de fichiers
 ```
 
-## 10. Envoie un seul event à AIKUB_Telemetry
+## 9. Envoie un seul event d'inventaire à AIKUB_Telemetry
+
+Cette limite concerne uniquement l'inventaire du run light, pas le nombre total de POST. Les logs sont envoyés séparément, en un ou plusieurs POST sous le même event type de compatibilité `bot_inventory_snapshot`, avec `payload.logs`. Le run sessions envoie un ou plusieurs POST `bot_sessions_snapshot` selon le chunking.
 
 Endpoint :
 
@@ -448,7 +411,7 @@ Exceptions figées :
 6. Découvrir localement seulement tes plugins Hermes enabled/actifs.
 7. Construire un JSON avec seulement les champs racine acceptés par AIKUB_Telemetry.
 8. Mettre tout l'inventaire dans `payload`.
-9. Envoyer un seul `bot_inventory_snapshot` à AIKUB_Telemetry avec tout le contenu light: identité, modèle, Codex/accounts si détectés, crons, plugins, skills, etc.
+9. Envoyer un seul `bot_inventory_snapshot` d'inventaire à AIKUB_Telemetry avec identité, modèle/provider, crons, plugins et skills.
 10. Ne rien logger d'autre dans l'event d'inventaire.
 11. Exécuter `scripts/aikub_telemetry_logs_incremental.py` pour envoyer les nouvelles lignes de logs.
 12. Ne pas exécuter `scripts/aikub_telemetry_sessions_snapshot.py` dans ce cron light.
@@ -516,7 +479,7 @@ docs/logs_contract.md
 
 ## 13. Section sessions figée
 
-Script gelé et exécuté seulement par le cron quotidien `AIKUB Telemetry Sessions` :
+Script gelé et exécuté seulement par le cron Linux quotidien `AIKUB Telemetry Sessions` :
 
 ```text
 scripts/aikub_telemetry_sessions_snapshot.py
@@ -546,6 +509,8 @@ Recette ERP validée :
 - suppression des caractères invalides comme NUL
 - chunking par défaut: 100 messages par POST
 ```
+
+Il s'agit d'un **snapshot complet** des sessions/messages admissibles à chaque run, pas d'un envoi incrémental : aucun curseur de sessions n'est utilisé. La limite existante de contenu reste **4000 caractères par message** (`--max-content-chars 4000`). Le script seul utilise 100 messages par chunk par défaut; le runner utilise `--chunk-size 50`. Le chunking ne change que le transport, pas la sélection complète.
 
 Le ERP doit regrouper tous les chunks par :
 

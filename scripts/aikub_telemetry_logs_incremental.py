@@ -146,7 +146,10 @@ def collect_lines(first_run_days: int, baseline_line: int | None = None) -> tupl
         mode = f"first_run_last_{first_run_days}_days"
 
     entries: list[dict[str, Any]] = []
-    last_line_no = 0
+    # lastLine remains the global high-water mark across inode changes/truncation.
+    # Legacy states already contain it; offsets still refer to the current file.
+    line_base = int(state.get("lastLine", 0)) if state else 0
+    last_line_no = line_base
     levels: dict[str, int] = {}
     included_started = False
 
@@ -167,15 +170,19 @@ def collect_lines(first_run_days: int, baseline_line: int | None = None) -> tupl
                     resume_line_no += 1
             else:
                 handle.seek(start_offset)
-        for line_no, line in enumerate(handle, 1 if mode != "incremental_since_cursor" else resume_line_no):
+        # readline keeps tell() available, unlike TextIOWrapper's iterator.
+        for line_no, line in enumerate(iter(handle.readline, ""), line_base + 1 if mode != "incremental_since_cursor" else resume_line_no):
             last_line_no = line_no
             if mode.startswith("first_run_last_"):
                 ts = parse_ts(line)
                 if ts is not None and ts < cutoff:
                     continue
-                included_started = True
+                if ts is not None:
+                    included_started = True
+                if not included_started:
+                    continue
             elif mode == "manual_baseline_line_no_duplicates":
-                if line_no <= baseline_line:
+                if line_no - line_base <= baseline_line:
                     continue
             entry = parse_entry(line_no, line, parent_entry)
             entries.append(entry)
@@ -183,13 +190,15 @@ def collect_lines(first_run_days: int, baseline_line: int | None = None) -> tupl
                 parent_entry = entry
             if entry.get("level"):
                 levels[entry["level"]] = levels.get(entry["level"], 0) + 1
+        # The log may have grown since stat(): persist only the bytes consumed.
+        end_offset = handle.tell()
 
     new_state = {
         "logName": "agent.log",
         "path": str(LOG_PATH),
         "inode": inode,
-        "offset": file_size,
-        "lastLine": max([e["line"] for e in entries], default=(baseline_line or last_line_no)),
+        "offset": end_offset,
+        "lastLine": max(last_line_no, baseline_line or 0),
         "updatedAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "mode": mode,
         "previousStateFound": bool(state),

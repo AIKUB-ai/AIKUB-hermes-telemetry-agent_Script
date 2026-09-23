@@ -42,11 +42,21 @@ docs/sessions_contract.md
 
 ## Étapes envoyées par cron
 
+Planification officielle : **cron Linux natif**, sans invocation d'agent/LLM. Depuis le dossier d'installation, utiliser uniquement :
+
+```bash
+./run_telemetry.sh install-cron
+```
+
+Cette commande installe de façon idempotente les deux entrées Linux : light à `0 */2 * * *`, sessions à `30 3 * * *` (fuseau horaire du cron système). Les runs de collecte et l'auto-update ne doivent pas créer ni modifier automatiquement les crons Hermes.
+
+**Migration :** les anciens crons Hermes de télémétrie doivent être désactivés explicitement par l'opérateur pour éviter les doublons avec Linux. L'installation ne les modifie pas; ne pas laisser les deux planifications actives.
+
 ### Cron régulier/light, aux 2h
 
 Le cron régulier envoie seulement :
 
-1. inventaire bot complet light: identité, modèle, comptes/contextes Codex si détectés, crons, plugins, skills, etc.;
+1. inventaire bot complet light: identité, modèle/provider, crons, plugins et skills;
 2. logs Hermes incrémentaux.
 
 Il ne doit pas envoyer les sessions.
@@ -61,15 +71,7 @@ Sans argument, `run_telemetry.sh` équivaut aussi à `light`.
 
 ### Auto-update / réparation de l'agent telemetry
 
-La stratégie officielle est : **chaque cron utilise une copie locale stable**, mais il commence par la mettre à jour depuis GitHub. Si le dossier local n'est pas un vrai repo Git, le bot doit le réparer au lieu de continuer sur une vieille copie.
-
-Au début du cron, le bot doit :
-
-1. utiliser `git fetch && git reset --hard origin/main` si `~/.hermes/aikub_telemetry_agent/.git` existe;
-2. sinon sauvegarder `~/.hermes/aikub_telemetry_agent` avec un suffixe `.old_TIMESTAMP`;
-3. refaire un `git clone` propre;
-4. recopier seulement les fichiers locaux nécessaires comme `.env` et `logs/`, sans afficher leur contenu;
-5. afficher `git log -1 --oneline` pour confirmer la version.
+La stratégie officielle est : **chaque cron utilise une copie locale stable** et tente d'abord sa mise à jour depuis GitHub via le helper du runner, sans invocation d'agent. La réparation d'une installation non Git relève de ce helper, pas d'une seconde procédure shell à recopier.
 
 Le repo contient aussi un helper idempotent :
 
@@ -80,10 +82,10 @@ bash scripts/aikub_telemetry_self_update.sh
 Le script fait :
 
 - `git fetch/reset` si le dossier est déjà un repo Git;
-- sauvegarde + `git clone` si le dossier n'est pas un repo Git;
+- réparation via `git clone` si le dossier n'est pas un repo Git;
 - préserve `.env`, `logs/` et fichiers d'état locaux sans afficher leur contenu.
 
-Si `git clone/fetch` échoue par auth/réseau, le bot doit rapporter l'erreur Git sans montrer de credential. Il ne doit pas prétendre être à jour s'il roule encore une copie sans `.git`.
+Si la mise à jour échoue par auth/réseau, le runner signale l'échec sans montrer de credential et continue seulement si une copie locale exploitable est disponible; sinon il s'arrête proprement. Il ne doit pas prétendre être à jour après cet échec. L'auto-update ne remplace pas l'installation explicite des crons via `install-cron`.
 
 ### Cron sessions, 1x/jour à 03:30
 
@@ -95,18 +97,11 @@ Commande officielle :
 ~/.hermes/aikub_telemetry_agent/run_telemetry.sh sessions
 ```
 
-À l'auto-update, le bot doit vérifier qu'un cron nommé `AIKUB Telemetry Sessions` existe. S'il est absent, il doit le créer une seule fois :
-
-```bash
-hermes cron create '30 3 * * *' \
-  --name 'AIKUB Telemetry Sessions' \
-  --deliver local \
-  "Auto-update le repo/script AIKUB telemetry, puis exécute ~/.hermes/aikub_telemetry_agent/run_telemetry.sh sessions. Ce cron sessions doit envoyer seulement bot_sessions_snapshot. Ne lance pas l'inventaire, les logs, Codex/accounts, modèle, plugins ni aucun autre event light dans ce cron."
-```
-
-Ne jamais créer de doublon si ce nom existe déjà.
+Le cron Linux sessions est installé par la même commande `./run_telemetry.sh install-cron`; ne pas créer de cron Hermes supplémentaire.
 
 ### 1. Inventaire bot
+
+Un seul événement d'inventaire est envoyé par run light. Les logs font l'objet de POST distincts, potentiellement multiples selon les chunks; le run sessions utilise également un ou plusieurs POST séparés.
 
 Le bot documente localement :
 
@@ -142,7 +137,9 @@ payload.logs.items[].raw
 
 ### 3. Sessions Hermes
 
-Le bot envoie les sessions/messages utiles depuis :
+Le bot renvoie à chaque run un **snapshot complet** des sessions/messages admissibles, et non un delta incrémental. Aucun curseur de sessions n'est utilisé. Le contenu de chaque message reste limité par défaut à **4000 caractères** (`--max-content-chars 4000`); « complet » décrit la sélection des sessions/messages, pas l'absence de troncature du contenu.
+
+Source :
 
 ```text
 ~/.hermes/state.db
@@ -239,7 +236,7 @@ Exemple inventory :
 - Aucun token de bot dans les env vars du service AIKUB_Telemetry/Railway.
 - Les vrais tokens bot restent dans Vault; le bot possède seulement son propre token client.
 - Le bot écrit seulement via l’API AIKUB_Telemetry.
-- Le bot n’écrit jamais directement dans la DB.
+- Le bot ne lit ni n'écrit directement dans la DB ERP/telemetry. La lecture de la DB locale Hermes `~/.hermes/state.db` est autorisée pour le snapshot sessions.
 - Aucun inventaire de fichiers (`fileInventory`).
 - Aucun contenu de fichier arbitraire.
 - Aucun plugin not enabled/inactif.

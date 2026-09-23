@@ -4,6 +4,8 @@ Ce document fige la section **logs** du script AIKUB Hermes Telemetry Agent.
 
 Objectif : envoyer les nouvelles lignes de `~/.hermes/logs/agent.log` à AIKUB Telemetry pour que le ERP puisse afficher un viewer de logs comme le dashboard Hermes.
 
+Exécution planifiée : cron Linux natif light à `0 */2 * * *`, installé uniquement via `./run_telemetry.sh install-cron`, sans invocation d'agent. Le cron sessions séparé est décrit dans `sessions_contract.md`. Lors d'une migration, l'opérateur doit désactiver explicitement les anciens crons Hermes pour éviter les doublons; aucun cron Hermes n'est créé ou modifié automatiquement.
+
 ## Principe important
 
 Le bot envoie les logs comme des lignes brutes Hermes. Le ERP doit afficher :
@@ -93,6 +95,8 @@ bot_log_incremental
 ```
 
 Mais tant que le ERP consomme le contrat actuel, ne pas changer l'event type sans migration coordonnée.
+
+Le run light envoie un seul événement d'inventaire, puis des POST logs distincts, potentiellement multiples selon les chunks et les réessais. L'utilisation du même event type ne signifie donc pas qu'un seul POST couvre inventaire et logs.
 
 ## Payload logs
 
@@ -226,7 +230,7 @@ Le script applique une redaction de patterns secrets avant l'envoi :
 - cookie;
 - credentials dans URL.
 
-Le bot ne doit jamais envoyer :
+Dans le payload logs, le bot ne doit jamais envoyer :
 
 - `.env` complet;
 - clés API;
@@ -236,6 +240,8 @@ Le bot ne doit jamais envoyer :
 - prompts complets;
 - contenu de fichiers arbitraires;
 - sessions complètes.
+
+Le snapshot sessions relève exclusivement du contrat `bot_sessions_snapshot` et du cron quotidien séparé. Tout envoi vers l'ERP passe par l'API, jamais par un accès direct à sa DB; la lecture locale de `state.db` Hermes reste autorisée pour ce snapshot.
 
 ## Commandes
 

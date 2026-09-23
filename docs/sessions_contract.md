@@ -4,6 +4,8 @@ Ce document fige la section **Sessions** du script AIKUB Hermes Telemetry Agent.
 
 Objectif : alimenter la page ERP **BotOps → Telemetry → Sessions** avec les sessions visibles et les messages utiles du bot Hermes.
 
+Exécution planifiée : cron Linux natif sessions à `30 3 * * *`, installé uniquement via `./run_telemetry.sh install-cron`, sans invocation d'agent. Cette commande installe aussi le light à `0 */2 * * *`; les sessions ne sont pas envoyées par le light. Lors d'une migration, l'opérateur doit désactiver explicitement les anciens crons Hermes pour éviter les doublons; aucun cron Hermes n'est créé ou modifié automatiquement.
+
 ## Source locale
 
 ```text
@@ -16,6 +18,8 @@ Tables Hermes utilisées :
 sessions
 messages
 ```
+
+La lecture de cette DB locale Hermes est autorisée pour la collecte. L'interdiction d'accès direct concerne la DB ERP/telemetry : le bot transmet exclusivement via l'API.
 
 ## Event envoyé
 
@@ -52,6 +56,8 @@ Le script envoie :
 
 Cette recette correspond au visuel ERP validé : afficher seulement les sessions/messages qui ont une valeur.
 
+Chaque run renvoie un **snapshot complet** de cette sélection, sans fenêtre incrémentale ni curseur de sessions. Le contenu reste limité par défaut à **4000 caractères par message** (`--max-content-chars 4000`), avec `contentTruncated` pour signaler la troncature. « Complet » ne signifie donc pas que le contenu des messages est illimité.
+
 ## Chunking
 
 Le snapshot complet peut être trop gros pour un seul POST. Le script envoie donc plusieurs chunks :
@@ -67,6 +73,8 @@ payload.sessions.items = liste des sessions visibles
 Côté ERP, il faut regrouper tous les events `bot_sessions_snapshot` qui ont le même `payload.sessions.batchId`, puis merger les messages.
 
 Ne pas prendre seulement le dernier chunk.
+
+Chaque chunk fait l'objet d'un POST séparé. La règle « un seul événement d'inventaire » du run light ne limite pas ces POST sessions. Le script seul utilise 100 messages par chunk par défaut; le runner utilise `--chunk-size 50`, sans modifier la sélection complète ni la limite de contenu.
 
 ## Déduplication ERP
 
