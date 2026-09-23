@@ -7,7 +7,6 @@ Objectif des étapes figées :
 1. à chaque cron régulier, documenter dans AIKUB_Telemetry ton inventaire de base : identité, modèle d'intelligence, skills disponibles, crons et plugins enabled;
 2. à chaque cron régulier, envoyer les nouvelles lignes de `~/.hermes/logs/agent.log` pour alimenter la section logs du ERP;
 3. envoyer les sessions/messages utiles de `~/.hermes/state.db` seulement via un cron quotidien séparé;
-4. envoyer chaque jour vers AIKUB ERP/BotOps une archive de survie du bot : dossiers Hermes/app, skills, personnalités/memories, config, crons, plugins, state et `.env`. Si les chemins ne sont pas standards, le bot doit auto-découvrir où ses données vivent au lieu d'abandonner.
 
 Ne log rien d'autre pour l'instant.
 
