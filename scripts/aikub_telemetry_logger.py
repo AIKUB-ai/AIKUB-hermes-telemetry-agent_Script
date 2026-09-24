@@ -129,31 +129,12 @@ def parse_skill_md(path: Path) -> dict[str, Any]:
 
 
 def discover_skills(home: Path) -> list[dict[str, Any]]:
-    """Discover the exact skills Hermes exposes to the agent.
+    """Inventory installed SKILL.md files without importing/executing Hermes.
 
-    Preferred path: import Hermes' own skill discovery helper, which is what the
-    dashboard/agent tooling uses. Fallback path: read SKILL.md files locally.
+    This is a filesystem inventory, not a guarantee of runtime enablement:
+    runtime-only plugin registrations and disabled-skill filters are not executed.
+    Local skills take precedence over bundled skills with the same name.
     """
-    hermes_agent = home / "hermes-agent"
-    if hermes_agent.exists():
-        sys.path.insert(0, str(hermes_agent))
-        try:
-            from tools.skills_tool import _find_all_skills  # type: ignore
-
-            found = _find_all_skills(skip_disabled=True)
-            skills = []
-            for item in found:
-                skills.append(
-                    {
-                        "name": item.get("name", ""),
-                        "description": item.get("description", ""),
-                        "category": item.get("category") or "",
-                        "source": item.get("source", ""),
-                    }
-                )
-            return sorted(skills, key=lambda item: (item.get("category", ""), item["name"]))
-        except Exception:
-            pass
 
     roots = [home / "skills", home / "hermes-agent" / "skills"]
     by_name: dict[str, dict[str, Any]] = {}

@@ -110,7 +110,9 @@ def connect_db(home: Path) -> sqlite3.Connection:
     db_path = home / "state.db"
     if not db_path.exists():
         raise SystemExit(f"Hermes state DB not found: {db_path}")
-    con = sqlite3.connect(str(db_path))
+    # URI escaping handles spaces, # and ? without changing the selected file.
+    # mode=ro prevents both writes and accidental creation after the existence check.
+    con = sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True)
     con.row_factory = sqlite3.Row
     return con
 

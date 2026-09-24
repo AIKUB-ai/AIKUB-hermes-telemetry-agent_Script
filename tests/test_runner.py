@@ -103,6 +103,27 @@ if 'logs_incremental' in sys.argv[1] and os.environ.get('FAIL_LOGS'): sys.exit(1
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((self.home / 'timezone').read_text(), 'UTC')
 
+    def test_hermes_home_resolution_does_not_override_configured_profile(self):
+        self.stub('python3', '''import os, pathlib
+(pathlib.Path(os.environ['TEST_HOME']) / 'selected-home').write_text(os.environ['HERMES_HOME'])
+''')
+        cases = [
+            ({}, 'HERMES_HOME="/fixture/profile"\n', '/fixture/profile'),
+            ({}, 'HERMES_REAL_HOME="/fixture/real"\n', '/fixture/real'),
+            ({'HERMES_REAL_HOME': '/fixture/env-real'}, '', '/fixture/env-real'),
+            ({'HERMES_HOME': '/fixture/env'}, 'HERMES_HOME=/fixture/file\n', '/fixture/env'),
+            ({}, '', str(self.home / '.hermes')),
+        ]
+        for environment, dotenv, expected in cases:
+            with self.subTest(environment=environment, dotenv=dotenv):
+                self.env.pop('HERMES_HOME', None)
+                self.env.pop('HERMES_REAL_HOME', None)
+                self.env.update(environment)
+                (self.install / '.env').write_text(dotenv)
+                result = self.run_script('light')
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual((self.home / 'selected-home').read_text(), expected)
+
     def test_invalid_mode_has_no_side_effects(self):
         result = self.run_script('typo')
         self.assertEqual(result.returncode, 2)
