@@ -135,7 +135,10 @@ Chaque item représente une ligne logique de `agent.log`.
 ```json
 {
   "line": 5729,
-  "timestamp": "2026-08-20 11:43:29,668",
+  "timestamp": "2026-08-20T15:43:29.668Z",
+  "sourceTimezone": "America/Toronto",
+  "timezoneSource": "AIKUB_LOG_TIMEZONE",
+  "timestampStatus": "normalized",
   "level": "INFO",
   "component": "agent.tool_executor",
   "message": "tool terminal completed...",
@@ -156,6 +159,37 @@ Chaque item représente une ligne logique de `agent.log`.
 - `line` : numéro de ligne dans `agent.log`, utilisé pour déduplication et tri.
 - `isContinuation` : true quand la ligne ne commence pas par timestamp/level.
 - `parentLine`, `parentLevel`, `parentComponent` : aident à rattacher une continuation line à la vraie ligne précédente.
+
+## Horodatage et fuseau source
+
+- `timestamp` : instant UTC ISO 8601 terminé par `Z`, ou `null`; jamais une heure locale sans offset déguisée en UTC. Millisecondes conservées; microsecondes conservées si présentes.
+- `sourceTimezone` : zone IANA configurée pour les heures naïves (`UTC`, `America/Toronto`), offset réellement écrit (`-04:00`, `+05:30`), ou `null` si inconnu. Un offset ne permet pas d'inventer une zone géographique.
+- `timezoneSource` : `explicit_offset`, `AIKUB_LOG_TIMEZONE` ou `unknown`.
+- `timestampStatus` : `normalized`, `unknown_timezone`, `ambiguous_local_time`, `nonexistent_local_time`, `invalid_timestamp` ou `missing`.
+- `raw` : ligne originale avec son heure d'origine, après nettoyage/redaction habituels; ce champ n'est pas réécrit pour afficher UTC.
+- Continuations : `timestamp=null`, `timestampStatus=missing`; `parentTimestamp`, `parentSourceTimezone`, `parentTimezoneSource`, `parentTimestampStatus` décrivent le dernier en-tête. Le curseur conserve ces seules métadonnées redactionnées entre runs, pas le message/brut. Pas d'héritage à travers une rotation/troncature; un ancien curseur sans parent reste valide.
+
+Les formes `YYYY-MM-DD HH:mm:ss,SSS` et ISO avec `T`, fractions `.`/`,` facultatives, `Z`, `±HH:MM` ou `±HHMM` sont reconnues. L'offset explicite est prioritaire même si l'override configure une autre zone. La détection automatique se limite à cette preuve présente **dans la ligne concernée** : aucun offset observé sur une ligne n'est propagé aux heures naïves d'autres lignes.
+
+Dans `payload.logs`, `sourceTimezone`/`timezoneSource` décrivent la configuration de repli pour les heures naïves (pas nécessairement toutes les lignes d'un fichier mixte). Les métadonnées **par item** font autorité; `timestampFormat=UTC_ISO8601_Z_or_null` indique le format de sortie.
+
+Premier run : seuls les instants connus et antérieurs à la limite UTC sont exclus, avec leurs continuations. Les heures inconnues, invalides, ambiguës/inexistantes et les continuations orphelines restent transmises. Un premier run sans fuseau connu peut donc envoyer davantage que trois jours. Une heure répétée au changement d'heure d'automne ne choisit jamais arbitrairement un `fold`; une heure inexistante au printemps ne subit aucun décalage inventé.
+
+### Déploiement pratique
+
+1. Vérifier le formatter réellement utilisé par le processus Hermes qui écrit **ce fichier**, ainsi que son environnement de service/conteneur. Un formatter UTC explicite (`gmtime`) prouve UTC pour ce processus; un formatter local nécessite aussi de vérifier le fuseau effectif du processus à l'époque des lignes. Le `TZ` du collecteur, `/etc/localtime` de l'hôte, la localisation du bot et le fuseau des crons ou de l'affichage Hermes ne prouvent pas celui du logger. Ne pas déduire cette information d'un simple fichier source installé, qui peut différer du code exécuté ou de l'historique.
+2. Seulement si ce fuseau est vérifié et cohérent sur la période collectée, ajouter au `.env` de l'installation, par exemple `AIKUB_LOG_TIMEZONE=America/Toronto` (été UTC−4, hiver UTC−5) ou `AIKUB_LOG_TIMEZONE=UTC`. Sinon laisser absent/vide. Le runner charge cette clé sans sourcer le `.env`; une valeur exportée non vide prévaut. En appel Python direct, exporter la variable explicitement : le script ne charge pas `.env` lui-même.
+3. La base IANA doit être installée (`tzdata` système, ou paquet Python `tzdata` dans l'environnement utilisé). Une valeur invalide/non disponible interrompt la collecte logs avant envoi/avancement du curseur, y compris pour un fichier vide; pas de repli silencieux vers UTC. `localtime`, `posixrules`, chemins absolus et règles POSIX ne sont pas des overrides admis.
+4. Si le logger a changé de zone, ne pas appliquer une nouvelle zone globale à un historique mixte naïf. Laisser ces instants inconnus ou traiter séparément une période dont la zone est prouvée. Préférer à l'avenir un formatter Hermes avec offset explicite lorsque cette configuration est supportée et vérifiée.
+5. Garder le curseur existant lors de la mise à jour : aucune réémission/correction historique automatique. Ne pas supprimer l'état pour « réparer » les dates déjà ingérées. Le transport, les chunks, la quarantaine, les secrets redactionnés et le type d'événement restent inchangés. Le consommateur doit accepter `timestamp=null` et ne pas remplacer une date inconnue par `occurredAt` (heure d'envoi).
+
+Les autres chemins ont été inspectés : l'inventaire génère `occurredAt` en UTC; les sessions convertissent les epochs SQLite avec `datetime.fromtimestamp(..., tz=timezone.utc)`. Ils ne doivent pas recevoir cet override de normalisation des logs.
+
+Tests hors ligne, sans accès ERP ni données de production :
+
+```bash
+python3 -m unittest discover -s tests -v
+```
 
 ## Déduplication / append
 

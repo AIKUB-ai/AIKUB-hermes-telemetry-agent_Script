@@ -90,6 +90,19 @@ if 'logs_incremental' in sys.argv[1] and os.environ.get('FAIL_LOGS'): sys.exit(1
                          ['aikub_telemetry_logger.py', 'aikub_telemetry_logs_incremental.py'])
         self.assertIn('logs snapshot failed', result.stderr)
 
+    def test_log_timezone_loaded_from_dotenv_with_environment_precedence(self):
+        (self.install / '.env').write_text('AIKUB_LOG_TIMEZONE="America/Toronto"\n')
+        self.stub('python3', '''import os, pathlib
+(pathlib.Path(os.environ['TEST_HOME']) / 'timezone').write_text(os.environ.get('AIKUB_LOG_TIMEZONE', 'missing'))
+''')
+        result = self.run_script('light')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.home / 'timezone').read_text(), 'America/Toronto')
+        self.env['AIKUB_LOG_TIMEZONE'] = 'UTC'
+        result = self.run_script('light')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.home / 'timezone').read_text(), 'UTC')
+
     def test_invalid_mode_has_no_side_effects(self):
         result = self.run_script('typo')
         self.assertEqual(result.returncode, 2)

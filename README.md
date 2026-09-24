@@ -123,6 +123,10 @@ Le bot envoie les nouvelles lignes de :
 
 Le script est incrémental : il garde un curseur local et envoie seulement les nouvelles lignes depuis le dernier envoi. Le ERP doit append/dédupliquer les lignes reçues et ne jamais supprimer les anciennes quand un nouveau batch arrive.
 
+Les timestamps parsés sont désormais en UTC ISO 8601 avec `Z`, ou `null` lorsque l'instant est inconnu (fuseau non prouvé, heure DST ambiguë/inexistante, date invalide). `raw` conserve l'heure originale après redaction. Chaque item transmet `sourceTimezone`, `timezoneSource` et `timestampStatus`; les continuations utilisent `parentTimestamp` et les métadonnées `parent*`.
+
+Pour les lignes sans offset, configurer **uniquement après vérification du logger Hermes** `AIKUB_LOG_TIMEZONE=UTC` ou `AIKUB_LOG_TIMEZONE=America/Toronto` dans le `.env` de l'installation. Le runner l'exporte au collecteur; une variable d'environnement non vide prévaut. Aucun fuseau machine/cron/config de planification n'est présumé être celui du logger. Sans preuve, laisser vide : les logs restent transmis, sans inventer UTC. Les offsets explicites présents dans les lignes sont détectés automatiquement et prioritaires. Voir [contrat et procédure de déploiement](docs/logs_contract.md#horodatage-et-fuseau-source).
+
 Avant l'envoi, le script nettoie les caractères de contrôle invalides (`NUL`/`\x00` et autres bytes non imprimables) puis redactionne les secrets. Une ligne de log corrompue ne doit pas faire planter tout le batch avec un `500 INTERNAL_ERROR` côté backend.
 
 Si un chunk est encore refusé par l'API, le script le coupe automatiquement en morceaux plus petits pour isoler la ligne fautive. Une fois rendu à une seule ligne refusée, il la met en quarantaine locale dans `~/.hermes/aikub_telemetry_state/failed_log_entries.jsonl`, jusqu'à `--max-quarantine` lignes par run, puis il continue les autres logs et avance le curseur. Ça évite qu'un parc complet de bots reste gelé sur la même ligne pendant des jours.

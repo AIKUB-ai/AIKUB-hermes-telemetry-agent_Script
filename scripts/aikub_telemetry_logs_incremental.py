@@ -2,7 +2,7 @@
 """Incremental Hermes agent.log telemetry sender for AIKUB tests.
 
 Behavior:
-- First run: sends log lines from the last N days.
+- First run: sends logs from the last N days plus lines whose time is unknown.
 - Later runs: sends only bytes appended since the saved cursor.
 - Splits transport into chunks to avoid oversized API payloads.
 - If a chunk is rejected, splits it smaller to isolate the bad log entry instead of freezing the whole bot.
@@ -23,6 +23,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 LOGGER_PATH = Path(__file__).with_name("aikub_telemetry_logger.py")
 HERMES_HOME = Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes"))).expanduser()
@@ -30,7 +31,11 @@ LOG_PATH = HERMES_HOME / "logs" / "agent.log"
 STATE_PATH = HERMES_HOME / "aikub_telemetry_state" / "logs_agent_log.json"
 QUARANTINE_PATH = HERMES_HOME / "aikub_telemetry_state" / "failed_log_entries.jsonl"
 
-LINE_RE = re.compile(r"^(?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3})\s+(?P<level>[A-Z]+)\s+(?P<rest>.*)$")
+LINE_RE = re.compile(
+    r"^(?P<ts>\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}"
+    r"(?:[,.]\d{1,6})?(?:Z|[+-]\d{2}:?\d{2})?)"
+    r"\s+(?P<level>[A-Z]+)\s+(?P<rest>.*)$"
+)
 SECRET_PATTERNS = [
     (re.compile(r"(?i)(x-api-key|api[_-]?key|token|password|passwd|secret|authorization|cookie)=([^\s,;]+)"), r"\1=[REDACTED]"),
     (re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._\-+/=]+"), r"\1[REDACTED]"),
@@ -62,14 +67,62 @@ def redact(text: str) -> str:
     return text
 
 
+def normalize_timestamp(stamp: str | None) -> dict[str, Any]:
+    """Resolve only evidenced offsets or an operator-verified logger IANA zone.
+
+    The collector's TZ, /etc/localtime and Hermes scheduling timezone are not
+    evidence of the timezone used by the process that wrote historical logs.
+    """
+    zone_name = os.environ.get("AIKUB_LOG_TIMEZONE", "").strip()
+    try:
+        if zone_name in {"localtime", "posixrules"} or zone_name.startswith(("posix/", "right/")):
+            raise ValueError("Not an IANA zone")
+        zone = ZoneInfo(zone_name) if zone_name else None
+    except (ValueError, ZoneInfoNotFoundError):
+        raise ValueError("AIKUB_LOG_TIMEZONE must name an installed IANA timezone (e.g. UTC or America/Toronto)") from None
+    result = {
+        "timestamp": None,
+        "sourceTimezone": zone_name or None,
+        "timezoneSource": "AIKUB_LOG_TIMEZONE" if zone else "unknown",
+        "timestampStatus": "missing" if stamp is None else "unknown_timezone",
+    }
+    if stamp is None:
+        return result
+    try:
+        dt = datetime.fromisoformat(stamp.replace(",", "."))
+    except ValueError:
+        result["timestampStatus"] = "invalid_timestamp"
+        return result
+    if dt.tzinfo is not None:
+        offset = dt.strftime("%z")
+        result.update(sourceTimezone="UTC" if dt.utcoffset() == timedelta(0) else offset[:3] + ":" + offset[3:],
+                      timezoneSource="explicit_offset")
+        dt = dt.astimezone(timezone.utc)
+    elif zone:
+        # Round-trip both folds: gaps have no candidates; overlaps have two.
+        candidates = set()
+        for fold in (0, 1):
+            candidate = dt.replace(tzinfo=zone, fold=fold).astimezone(timezone.utc)
+            if candidate.astimezone(zone).replace(tzinfo=None) == dt:
+                candidates.add(candidate)
+        if len(candidates) != 1:
+            result["timestampStatus"] = "ambiguous_local_time" if candidates else "nonexistent_local_time"
+            return result
+        dt = candidates.pop()
+    else:
+        return result
+    precision = "microseconds" if dt.microsecond % 1000 else "milliseconds"
+    result.update(timestamp=dt.isoformat(timespec=precision).replace("+00:00", "Z"),
+                  timestampStatus="normalized")
+    return result
+
+
 def parse_ts(line: str) -> datetime | None:
     match = LINE_RE.match(line)
     if not match:
         return None
-    try:
-        return datetime.strptime(match.group("ts"), "%Y-%m-%d %H:%M:%S,%f").replace(tzinfo=timezone.utc)
-    except ValueError:
-        return None
+    stamp = normalize_timestamp(match.group("ts"))["timestamp"]
+    return datetime.fromisoformat(stamp) if stamp else None
 
 
 def parse_entry(line_no: int, raw_line: str, parent: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -78,14 +131,12 @@ def parse_entry(line_no: int, raw_line: str, parent: dict[str, Any] | None = Non
     level = match.group("level") if match else None
     component = None
     message = safe
-    timestamp = None
     is_continuation = match is None
     parent_line = None
     parent_timestamp = None
     parent_level = None
     parent_component = None
     if match:
-        timestamp = match.group("ts")
         rest = match.group("rest")
         rest = re.sub(r"^\[[^\]]+\]\s+", "", rest)
         if ": " in rest:
@@ -99,7 +150,7 @@ def parse_entry(line_no: int, raw_line: str, parent: dict[str, Any] | None = Non
         parent_component = parent.get("component")
     return {
         "line": line_no,
-        "timestamp": timestamp,
+        **normalize_timestamp(match.group("ts") if match else None),
         "level": level,
         "component": component,
         "message": message,
@@ -108,6 +159,9 @@ def parse_entry(line_no: int, raw_line: str, parent: dict[str, Any] | None = Non
         "isContinuation": is_continuation,
         "parentLine": parent_line,
         "parentTimestamp": parent_timestamp,
+        "parentSourceTimezone": parent.get("sourceTimezone") if is_continuation and parent else None,
+        "parentTimezoneSource": parent.get("timezoneSource") if is_continuation and parent else None,
+        "parentTimestampStatus": parent.get("timestampStatus") if is_continuation and parent else None,
         "parentLevel": parent_level,
         "parentComponent": parent_component,
     }
@@ -128,6 +182,8 @@ def write_state(state: dict[str, Any]) -> None:
 
 
 def collect_lines(first_run_days: int, baseline_line: int | None = None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    # Validate even for empty files, before sending or changing a cursor.
+    configured_timezone = normalize_timestamp(None)
     stat = LOG_PATH.stat()
     state = read_state()
     file_size = stat.st_size
@@ -151,9 +207,12 @@ def collect_lines(first_run_days: int, baseline_line: int | None = None) -> tupl
     line_base = int(state.get("lastLine", 0)) if state else 0
     last_line_no = line_base
     levels: dict[str, int] = {}
-    included_started = False
+    # Orphan lines have no reliable event time: keep them rather than guess.
+    included_started = True
 
     parent_entry: dict[str, Any] | None = None
+    if mode == "incremental_since_cursor" and state:
+        parent_entry = state.get("lastParent")
     with LOG_PATH.open("r", encoding="utf-8", errors="replace") as handle:
         if mode == "incremental_since_cursor":
             # Resume exactly at the saved byte cursor. If the cursor somehow lands in the
@@ -173,21 +232,20 @@ def collect_lines(first_run_days: int, baseline_line: int | None = None) -> tupl
         # readline keeps tell() available, unlike TextIOWrapper's iterator.
         for line_no, line in enumerate(iter(handle.readline, ""), line_base + 1 if mode != "incremental_since_cursor" else resume_line_no):
             last_line_no = line_no
+            entry = parse_entry(line_no, line, parent_entry)
+            if entry.get("parsed"):
+                parent_entry = entry
             if mode.startswith("first_run_last_"):
-                ts = parse_ts(line)
-                if ts is not None and ts < cutoff:
-                    continue
-                if ts is not None:
-                    included_started = True
+                if entry["parsed"]:
+                    ts = datetime.fromisoformat(entry["timestamp"]) if entry["timestamp"] else None
+                    # Unknown/ambiguous times cannot safely be aged out.
+                    included_started = ts is None or ts >= cutoff
                 if not included_started:
                     continue
             elif mode == "manual_baseline_line_no_duplicates":
                 if line_no - line_base <= baseline_line:
                     continue
-            entry = parse_entry(line_no, line, parent_entry)
             entries.append(entry)
-            if entry.get("parsed"):
-                parent_entry = entry
             if entry.get("level"):
                 levels[entry["level"]] = levels.get(entry["level"], 0) + 1
         # The log may have grown since stat(): persist only the bytes consumed.
@@ -204,6 +262,13 @@ def collect_lines(first_run_days: int, baseline_line: int | None = None) -> tupl
         "previousStateFound": bool(state),
         "levelsInThisRun": levels,
         "entriesInThisRun": len(entries),
+        "sourceTimezone": configured_timezone["sourceTimezone"],
+        "timezoneSource": configured_timezone["timezoneSource"],
+        # Keep only redacted metadata, never persist the parent's raw/message.
+        "lastParent": {key: parent_entry.get(key) for key in (
+            "line", "timestamp", "level", "component", "sourceTimezone",
+            "timezoneSource", "timestampStatus",
+        )} if parent_entry else None,
     }
     return entries, new_state
 
@@ -254,6 +319,9 @@ def build_log_payload(
                 "transportChunkingOnly": True,
                 "dedupeStrategy": "persistent_file_cursor_offset_inode",
                 "mode": state.get("mode"),
+                "sourceTimezone": state.get("sourceTimezone"),
+                "timezoneSource": state.get("timezoneSource", "unknown"),
+                "timestampFormat": "UTC_ISO8601_Z_or_null",
                 "lineStart": chunk[0]["line"] if chunk else None,
                 "lineEnd": chunk[-1]["line"] if chunk else None,
                 "returnedCount": len(chunk),
