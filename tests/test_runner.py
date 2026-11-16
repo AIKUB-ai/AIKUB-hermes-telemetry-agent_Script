@@ -42,6 +42,7 @@ else:
 p = pathlib.Path(os.environ['TEST_HOME']) / 'calls'
 with p.open('a') as f: f.write(json.dumps(sys.argv[1:]) + '\\n')
 if 'logs_incremental' in sys.argv[1] and os.environ.get('FAIL_LOGS'): sys.exit(1)
+if 'aikub_telemetry_logger.py' == sys.argv[1] and os.environ.get('FAIL_INVENTORY'): sys.exit(1)
 ''')
 
     def stub(self, name, body):
@@ -82,10 +83,17 @@ if 'logs_incremental' in sys.argv[1] and os.environ.get('FAIL_LOGS'): sys.exit(1
                                   *self.calls()[0][1:], '--help'], capture_output=True)
         self.assertEqual(checked.returncode, 0)
 
-    def test_light_no_sessions_and_logs_failure_nonfatal(self):
+    def test_inventory_failure_still_sends_logs_and_marks_run_failed(self):
+        self.env['FAIL_INVENTORY'] = '1'
+        result = self.run_script('light')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual([c[0] for c in self.calls()],
+                         ['aikub_telemetry_logger.py', 'aikub_telemetry_logs_incremental.py'])
+
+    def test_light_no_sessions_and_logs_failure_reported(self):
         self.env['FAIL_LOGS'] = '1'
         result = self.run_script('light')
-        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotEqual(result.returncode, 0, result.stderr)
         self.assertEqual([c[0] for c in self.calls()],
                          ['aikub_telemetry_logger.py', 'aikub_telemetry_logs_incremental.py'])
         self.assertIn('logs snapshot failed', result.stderr)

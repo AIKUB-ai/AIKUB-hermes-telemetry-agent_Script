@@ -178,7 +178,9 @@ def read_state() -> dict[str, Any] | None:
 
 def write_state(state: dict[str, Any]) -> None:
     STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    STATE_PATH.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    pending = STATE_PATH.with_suffix(STATE_PATH.suffix + ".tmp")
+    pending.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    pending.replace(STATE_PATH)
 
 
 def collect_lines(first_run_days: int, baseline_line: int | None = None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -230,7 +232,13 @@ def collect_lines(first_run_days: int, baseline_line: int | None = None) -> tupl
             else:
                 handle.seek(start_offset)
         # readline keeps tell() available, unlike TextIOWrapper's iterator.
+        end_offset = handle.tell()
         for line_no, line in enumerate(iter(handle.readline, ""), line_base + 1 if mode != "incremental_since_cursor" else resume_line_no):
+            if not line.endswith("\n"):
+                # Never consume a line the source writer has not finished.
+                handle.seek(end_offset)
+                break
+            end_offset = handle.tell()
             last_line_no = line_no
             entry = parse_entry(line_no, line, parent_entry)
             if entry.get("parsed"):
@@ -381,6 +389,11 @@ def send(entries: list[dict[str, Any]], state: dict[str, Any], chunk_size: int, 
         result = post_chunk(chunk, label, chunk_index, chunk_count)
         if result.get("ok"):
             return True
+        # Network/auth/rate-limit/ERP failures are not bad log lines. Preserve
+        # the cursor so the same source bytes can be retried next run.
+        if result.get("status") not in (400, 413, 422):
+            abort_reason = "delivery_not_acknowledged"
+            return False
         if len(chunk) <= 1:
             if len(quarantined) >= max_quarantine:
                 abort_reason = f"max_quarantine_exceeded_{max_quarantine}"

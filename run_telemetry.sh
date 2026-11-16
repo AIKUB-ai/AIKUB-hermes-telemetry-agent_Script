@@ -7,7 +7,7 @@
 
 set -euo pipefail
 
-export AIKUB_TELEMETRY_RUNNER_VERSION="2026.09.23.1"
+export AIKUB_TELEMETRY_RUNNER_VERSION="2026.11.16.1"
 SCRIPT_PATH="${BASH_SOURCE[0]}"
 INSTALL_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
 # Resolve HERMES_HOME only after reading explicit profile paths from .env.
@@ -112,13 +112,19 @@ ensure_local_cron_lock() {
 }
 
 run_light() {
+  local failed=0
   echo "AIKUB Telemetry: sending inventory snapshot (identity + model + crons + plugins)"
-  python3 aikub_telemetry_logger.py
+  if ! python3 aikub_telemetry_logger.py; then
+    echo "WARN: inventory snapshot failed; still attempting logs" >&2
+    failed=1
+  fi
 
   echo "AIKUB Telemetry: sending logs snapshot"
   if ! python3 aikub_telemetry_logs_incremental.py --first-run-days 3 --chunk-size 250; then
-    echo "WARN: logs snapshot failed; continuing light telemetry" >&2
+    echo "WARN: logs snapshot failed; cursor preserved for next run" >&2
+    failed=1
   fi
+  return "$failed"
 }
 
 run_sessions() {

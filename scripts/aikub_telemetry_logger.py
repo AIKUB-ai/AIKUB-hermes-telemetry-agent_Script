@@ -339,10 +339,13 @@ def post_event(endpoint: str, api_key: str, bot_id: str, payload: dict[str, Any]
     try:
         with urllib.request.urlopen(request, timeout=120) as response:
             response_body = response.read().decode("utf-8", errors="replace")
+            parsed = json.loads(response_body) if response_body else None
+            relay = parsed.get("erpImport") if isinstance(parsed, dict) else None
+            relay_ok = not isinstance(relay, dict) or (relay.get("ok") is True and not relay.get("skipped"))
             return {
-                "ok": 200 <= response.status < 300,
+                "ok": 200 <= response.status < 300 and relay_ok,
                 "status": response.status,
-                "body": json.loads(response_body) if response_body else None,
+                "body": parsed,
             }
     except urllib.error.HTTPError as exc:
         response_body = exc.read().decode("utf-8", errors="replace")

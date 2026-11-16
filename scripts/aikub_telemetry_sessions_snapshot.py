@@ -312,6 +312,23 @@ def build_payload(
 
 
 def send_payload(payload: dict[str, Any], endpoint: str, api_key: str, bot_id: str, timeout: int) -> dict[str, Any]:
+    import time
+    for attempt in range(3):
+        try:
+            return _send_payload_once(payload, endpoint, api_key, bot_id, timeout)
+        except urllib.error.HTTPError as exc:
+            if exc.code not in (408, 429) and exc.code < 500:
+                raise
+            if attempt == 2:
+                raise
+        except (urllib.error.URLError, TimeoutError, RuntimeError):
+            if attempt == 2:
+                raise
+        time.sleep(2 ** attempt)
+    raise RuntimeError("Session delivery not acknowledged")
+
+
+def _send_payload_once(payload: dict[str, Any], endpoint: str, api_key: str, bot_id: str, timeout: int) -> dict[str, Any]:
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     request = urllib.request.Request(endpoint, data=body, method="POST")
     request.add_header("content-type", "application/json")
@@ -322,6 +339,15 @@ def send_payload(payload: dict[str, Any], endpoint: str, api_key: str, bot_id: s
             parsed = json.loads(raw)
         except Exception:
             parsed = {"raw": raw[:500]}
+        relay = parsed.get("erpImport") if isinstance(parsed, dict) else None
+        if isinstance(relay, dict):
+            waiting = relay.get("skipped") and relay.get("reason") == "SESSION_BATCH_INCOMPLETE"
+            if relay.get("ok") is not True or (relay.get("skipped") and not waiting):
+                raise RuntimeError("Session ERP import not acknowledged")
+        chunk = payload.get("payload", {}).get("sessions", {})
+        batch = parsed.get("batch") if isinstance(parsed, dict) else None
+        if chunk.get("chunkIndex") == chunk.get("chunkCount") and isinstance(batch, dict) and batch.get("status") != "COMPLETE":
+            raise RuntimeError("Final session batch is incomplete")
         return {"status": resp.status, "bytes": len(body), "response": parsed}
 
 
