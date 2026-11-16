@@ -16,14 +16,15 @@ class SessionDeadlineTest(unittest.TestCase):
         env = {"AIKUB_TELEMETRY_BOT_ID": "test-bot"}
         with patch("sys.argv", [str(script)]), \
              patch.object(module, "optional_env", side_effect=lambda key, default="": env.get(key, default)), \
-             patch.object(module, "require_env", return_value="https://collector.example.test"), \
+             patch.object(module, "require_base_url", return_value="https://collector.example.test"), \
              patch.object(module, "require_token", return_value="test-only-token"), \
-             patch.object(module, "collect_sessions_and_messages", return_value=({}, [], [])), \
-             patch.object(module, "send_payload", return_value={"status": 200}) as send, \
+             patch.object(module, "collect_sessions_and_messages", return_value=({'cursor': {'mode': 'test'}}, [], [{'messageId': 1}], {})), \
+             patch.object(module, "write_state"), \
+             patch.object(module, "send_payload", return_value={"status": 200, "ok": True}) as send, \
              contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(module.main(), 0)
         self.assertTrue(send.called)
-        self.assertGreater(send.call_args.args[-1], 120)
+        self.assertGreater(send.call_args.args[-2], 120)
 
 
 if __name__ == "__main__":

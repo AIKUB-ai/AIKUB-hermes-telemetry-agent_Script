@@ -36,7 +36,7 @@ class DeliveryTests(unittest.TestCase):
     def test_transient_errors_never_quarantine_or_advance_logs(self):
         for status in [None, 201, 401, 403, 429, 500, 503]:
             with self.subTest(status=status):
-                base = SimpleNamespace(build_payload=lambda *_: {'payload': {}}, optional_env=lambda *_: 'test', build_endpoint=lambda _: 'https://test', require_env=lambda _: 'https://test', require_token=lambda: 'test', post_event=Mock(return_value={'ok':False,'status':status,'body':{}}))
+                base = SimpleNamespace(build_payload=lambda *_: {'payload': {}}, optional_env=lambda *_: 'test', build_endpoint=lambda _: 'https://test', require_base_url=lambda: 'https://test', require_token=lambda: 'test', post_event=Mock(return_value={'ok':False,'status':status,'body':{}}))
                 with patch.object(logs, 'load_base_logger', return_value=base), patch.object(logs, 'append_quarantine') as quarantine, patch.object(logs.time,'sleep'):
                     result=logs.send([{'line':1},{'line':2}], {'entriesInThisRun':2}, 250, False, 25)
                 self.assertFalse(result['allOk'])
@@ -57,15 +57,13 @@ class DeliveryTests(unittest.TestCase):
         payload={'payload':{'sessions':{'chunkIndex':2,'chunkCount':2}}}
         body={'batch':{'status':'PARTIAL'},'erpImport':{'ok':True,'skipped':True,'reason':'SESSION_BATCH_INCOMPLETE'}}
         with patch.object(sessions.urllib.request,'urlopen',return_value=response(body)), patch('time.sleep'):
-            with self.assertRaises(RuntimeError):
-                sessions.send_payload(payload,'https://test/events','test','bot',1)
+            self.assertFalse(sessions.send_payload(payload,'https://test/events','test','bot',1)['ok'])
 
     def test_sessions_reject_final_waiting_ack_without_batch_metadata(self):
         payload = {'payload': {'sessions': {'chunkIndex': 1, 'chunkCount': 1}}}
         body = {'erpImport': {'ok': True, 'skipped': True, 'reason': 'SESSION_BATCH_INCOMPLETE'}}
         with patch.object(sessions.urllib.request, 'urlopen', return_value=response(body)), patch('time.sleep'):
-            with self.assertRaises(RuntimeError):
-                sessions.send_payload(payload, 'https://test/events', 'test', 'bot', 1)
+            self.assertFalse(sessions.send_payload(payload, 'https://test/events', 'test', 'bot', 1)['ok'])
 
     def test_partial_log_line_is_held_until_newline(self):
         import tempfile

@@ -352,7 +352,7 @@ def send(entries: list[dict[str, Any]], state: dict[str, Any], chunk_size: int, 
     base = load_base_logger()
     home = HERMES_HOME
     base_payload = base.build_payload(base.optional_env("AIKUB_TELEMETRY_BOT_ID", "unknown"), home)
-    endpoint = base.build_endpoint(base.require_env("AIKUB_TELEMETRY_BASE_URL"))
+    endpoint = base.build_endpoint(base.require_base_url())
     api_key = base.require_token()
     configured_bot_id = base.optional_env("AIKUB_TELEMETRY_BOT_ID")
     bot_id = configured_bot_id or "unknown"
