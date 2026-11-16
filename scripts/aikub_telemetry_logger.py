@@ -768,6 +768,58 @@ def redacted_config(endpoint: str, bot_id: str, home: Path) -> dict[str, Any]:
     }
 
 
+def upgrade_legacy_runner(base_url: str, install_dir: Path | None = None) -> bool:
+    """Upgrade known legacy hosted wrappers, without cron edits or a replay.
+
+    The old shell can keep reading its original inode; replacement is atomic.
+    Preserve its implicit mode in an external marker for all future updates.
+    Unknown installations and offline/invalid downloads remain untouched.
+    """
+    import tempfile
+
+    root = install_dir or Path(__file__).resolve().parent.parent
+    runner = root / "run_telemetry.sh"
+    staging: Path | None = None
+    try:
+        if not runner.is_file() or runner.is_symlink():
+            return False
+        previous = runner.read_text(encoding="utf-8")
+        if 'AIKUB_TELEMETRY_RUNNER_VERSION="2026.09.02.1"' not in previous or "AIKUB_TELEMETRY_SELF_UPDATED" in previous:
+            return False
+        default = re.search(r'MODE="\$\{1:-(light|all)\}"', previous)
+        if not default:
+            return False
+        with urllib.request.urlopen(base_url.rstrip("/") + "/agent/run_telemetry.sh", timeout=20) as response:
+            updated = response.read(1024 * 1024 + 1)
+        if len(updated) > 1024 * 1024 or b"AIKUB_TELEMETRY_SELF_UPDATED" not in updated or b'AIKUB_TELEMETRY_RUNNER_VERSION="2026.11.16.1"' not in updated:
+            return False
+        with tempfile.NamedTemporaryFile(dir=root, prefix=".run_telemetry.next.", delete=False) as handle:
+            staging = Path(handle.name)
+            handle.write(updated)
+        valid = subprocess.run(["bash", "-n", str(staging)], capture_output=True, timeout=10)
+        if valid.returncode:
+            return False
+        # Backup once. There are no credentials in the wrapper; .env is untouched.
+        backup = root / ".run_telemetry.legacy.sh"
+        if not backup.exists():
+            with backup.open("x", encoding="utf-8") as handle:
+                handle.write(previous)
+            backup.chmod(0o600)
+        marker = root / ".runner-default-mode"
+        if not marker.exists():
+            with marker.open("x", encoding="utf-8") as handle:
+                handle.write(default.group(1) + "\n")
+            marker.chmod(0o600)
+        staging.chmod(0o755)
+        os.replace(staging, runner)
+        return True
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return False
+    finally:
+        if staging is not None:
+            staging.unlink(missing_ok=True)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Self-document Hermes bot identity, model, skills, crons, and enabled plugins to Aikub Telemetry.")
     parser.add_argument("--dry-run", action="store_true", help="Print discovered payload/config without sending.")
@@ -787,6 +839,8 @@ def main() -> int:
         return 0
 
     result = post_event(endpoint, api_key, bot_id, payload)
+    if result.get("ok"):
+        upgrade_legacy_runner(require_base_url())
     print(json.dumps({
         "config": redacted_config(endpoint, bot_id, home),
         "inventory": {
