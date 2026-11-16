@@ -60,6 +60,13 @@ class DeliveryTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 sessions.send_payload(payload,'https://test/events','test','bot',1)
 
+    def test_sessions_reject_final_waiting_ack_without_batch_metadata(self):
+        payload = {'payload': {'sessions': {'chunkIndex': 1, 'chunkCount': 1}}}
+        body = {'erpImport': {'ok': True, 'skipped': True, 'reason': 'SESSION_BATCH_INCOMPLETE'}}
+        with patch.object(sessions.urllib.request, 'urlopen', return_value=response(body)), patch('time.sleep'):
+            with self.assertRaises(RuntimeError):
+                sessions.send_payload(payload, 'https://test/events', 'test', 'bot', 1)
+
     def test_partial_log_line_is_held_until_newline(self):
         import tempfile
         with tempfile.TemporaryDirectory() as temp:

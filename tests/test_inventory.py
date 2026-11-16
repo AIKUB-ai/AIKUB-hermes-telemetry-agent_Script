@@ -49,6 +49,7 @@ class InventoryTests(unittest.TestCase):
             "HOME": str(self.home), "HERMES_HOME": str(self.home),
             "AIKUB_TELEMETRY_BASE_URL": "https://telemetry.example.test",
             "AIKUB_TELEMETRY_BOTOPS_TOKEN": "test-write-token",
+            "AIKUB_TELEMETRY_DISABLE_OPENCLAW_CLI": "1",
             "AIKUB_TELEMETRY_BOT_ID": "test-bot",
             "AIKUB_CODEX_ACCOUNT_EMAIL": "override@example.test",
             "OPENAI_CODEX_EMAIL": "other@example.test",
@@ -75,7 +76,8 @@ class InventoryTests(unittest.TestCase):
         self.addCleanup(self.http.stop)
 
     def assert_no_accounts(self, value):
-        forbidden = {"accounts", "codex", "oauth", "email", "fingerprint", "quota", "plan",
+        # Account identity is required for modern BotOps, credentials never are.
+        forbidden = {"fingerprint", "quota", "plan",
                      "credential", "access_token", "refresh_token", "id_token", "authType"}
         if isinstance(value, dict):
             for key, item in value.items():
@@ -85,7 +87,7 @@ class InventoryTests(unittest.TestCase):
             for item in value:
                 self.assert_no_accounts(item)
         serialized = json.dumps(value)
-        for private in ("private@example.test", "private-token", "private-plan",
+        for private in ("private-token", "private-plan",
                         "override@example.test", "other@example.test"):
             self.assertNotIn(private, serialized)
 
@@ -105,7 +107,8 @@ class InventoryTests(unittest.TestCase):
 
         with patch.object(Path, "open", record_open), patch.object(os, "getenv", record_getenv):
             logger.build_payload("test-bot", self.home)
-        self.assertEqual(set(opened), {self.config, self.skill, self.crons})
+        self.assertTrue({self.config, self.skill, self.crons}.issubset(set(opened)))
+        self.assertTrue(set(opened).issubset({self.config, self.skill, self.crons, self.home / 'auth.json'}))
         self.assertNotIn("AIKUB_CODEX_ACCOUNT_EMAIL", requested_env)
         self.assertNotIn("OPENAI_CODEX_EMAIL", requested_env)
 
@@ -115,17 +118,21 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(set(event), {"botId", "eventType", "severity", "source", "traceId",
                                       "sessionId", "occurredAt", "payload"})
         inventory = event["payload"]
-        self.assertEqual(set(inventory), {"identity", "model", "skillCount", "skills", "crons", "plugins"})
+        self.assertEqual(set(inventory), {"identity", "model", "skillCount", "skills", "crons", "plugins",
+                                         "oauthAccount", "telemetryScript", "telemetryScriptVersion", "inventoryDiscovery"})
+        self.assertEqual(inventory['oauthAccount'], {'provider': 'openai-codex', 'email': 'private@example.test', 'name': None, 'userId': None})
         self.assertEqual(inventory["model"], {"provider": "openai-codex", "name": "gpt-test", "context": 12345})
         self.assertEqual(inventory["identity"]["kind"], "Hermes Agent")
         self.assertEqual(inventory["skillCount"], 1)
-        self.assertEqual(inventory["skills"], [{"name": "demo", "description": "Demo skill",
-                                               "path": str(self.skill), "category": "tools"}])
+        skill = inventory['skills'][0]
+        self.assertEqual((skill['name'], skill['description'], skill['path'], skill['category']),
+                         ('demo', 'Demo skill', str(self.skill), 'tools'))
+        self.assertTrue(skill['usableByHermes'])
         self.assertEqual(inventory["crons"]["cronNames"], ["daily"])
         job = inventory["crons"]["items"][0]
         self.assertEqual(job["provider"], "openai-codex")
         self.assertEqual(job["model"], "gpt-test")
-        self.assertEqual(job["schedule"], {"kind": "cron", "display": "0 9 * * *"})
+        self.assertEqual(job["schedule"], {"kind": "cron", "display": "0 9 * * *", "expr": "0 9 * * *", "tz": None})
         self.assertNotIn("prompt", job)
         self.assertNotIn("delivery_error", job)
         self.assertEqual(inventory["plugins"]["enabledCount"], 1)

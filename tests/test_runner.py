@@ -68,8 +68,8 @@ if 'aikub_telemetry_logger.py' == sys.argv[1] and os.environ.get('FAIL_INVENTORY
             self.assertEqual(result.returncode, 0, result.stderr)
         text = cron.read_text()
         self.assertIn('15 8 * * * /bin/true', text)
-        self.assertEqual(text.count('0 */2 * * *'), 1)
-        self.assertEqual(text.count('30 3 * * *'), 1)
+        self.assertEqual(text.count('-23/2 * * *'), 1)
+        self.assertEqual(text.count('run_telemetry.sh sessions'), 1)
         self.assertNotIn('hermes cron', text)
         self.assertEqual(self.calls(), [])
 

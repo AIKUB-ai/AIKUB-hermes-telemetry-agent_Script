@@ -165,7 +165,9 @@ class PassiveReadersTests(unittest.TestCase):
                 skill.write_text('---\nname: demo\ndescription: ' + desc + '\n---\n')
             before = list(sys.path)
             # Any runtime import is forbidden, even one that gets caught internally.
-            with patch('builtins.__import__', side_effect=AssertionError('unexpected import')) as imports:
+            with patch.dict(os.environ, {'OPENCLAW_HOME': str(home / 'openclaw')}), \
+                    patch.object(logger, 'discover_openclaw_skills', return_value=[]), \
+                    patch('builtins.__import__', side_effect=AssertionError('unexpected import')) as imports:
                 found = logger.discover_skills(home)
             imports.assert_not_called()
             self.assertEqual(sys.path, before)

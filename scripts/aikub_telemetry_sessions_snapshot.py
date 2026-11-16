@@ -120,12 +120,27 @@ def connect_db(home: Path) -> sqlite3.Connection:
 def collect_sessions_and_messages(home: Path, max_content_chars: int) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
     con = connect_db(home)
     cur = con.cursor()
+    # A connection-local TEMP view keeps the source DB read-only and gives older
+    # Hermes schemas the same visibility semantics without requiring a migration.
+    defaults = {
+        'messages': {'active': '1', 'compacted': '0', 'tool_name': 'NULL',
+                     'token_count': 'NULL', 'platform_message_id': 'NULL'},
+        'sessions': {'title': 'NULL', 'model_config': 'NULL', 'model': 'NULL',
+                     'billing_provider': 'NULL', 'ended_at': 'NULL', 'archived': '0',
+                     'tool_call_count': '0', 'api_call_count': '0',
+                     'input_tokens': '0', 'output_tokens': '0',
+                     'chat_id': 'NULL', 'chat_type': 'NULL'},
+    }
+    for table, fields in defaults.items():
+        columns = {row[1] for row in cur.execute(f'PRAGMA table_info({table})')}
+        extra = ''.join(f', {value} AS {name}' for name, value in fields.items() if name not in columns)
+        cur.execute(f'CREATE TEMP VIEW telemetry_{table} AS SELECT *{extra} FROM main.{table}')
 
-    raw_total_sessions = cur.execute("SELECT count(*) FROM sessions").fetchone()[0]
-    raw_total_messages = cur.execute("SELECT count(*) FROM messages").fetchone()[0]
-    active_messages = cur.execute("SELECT count(*) FROM messages WHERE active = 1").fetchone()[0]
+    raw_total_sessions = cur.execute("SELECT count(*) FROM telemetry_sessions").fetchone()[0]
+    raw_total_messages = cur.execute("SELECT count(*) FROM telemetry_messages").fetchone()[0]
+    active_messages = cur.execute("SELECT count(*) FROM telemetry_messages WHERE active = 1").fetchone()[0]
     visible_messages = cur.execute(
-        "SELECT count(*) FROM messages WHERE active = 1 AND coalesce(compacted, 0) = 0 AND coalesce(content, '') != ''"
+        "SELECT count(*) FROM telemetry_messages WHERE active = 1 AND coalesce(compacted, 0) = 0 AND coalesce(content, '') != ''"
     ).fetchone()[0]
 
     session_rows = cur.execute(
@@ -134,8 +149,8 @@ def collect_sessions_and_messages(home: Path, max_content_chars: int) -> tuple[d
             s.*,
             coalesce(max(m.timestamp), s.started_at) AS last_message_at,
             count(m.id) AS visible_message_count
-        FROM sessions s
-        JOIN messages m ON m.session_id = s.id
+        FROM telemetry_sessions s
+        JOIN telemetry_messages m ON m.session_id = s.id
             AND m.active = 1
             AND coalesce(m.compacted, 0) = 0
             AND coalesce(m.content, '') != ''
@@ -150,8 +165,8 @@ def collect_sessions_and_messages(home: Path, max_content_chars: int) -> tuple[d
     for row in cur.execute(
         """
         SELECT s.source, count(distinct s.id) AS c
-        FROM sessions s
-        JOIN messages m ON m.session_id = s.id
+        FROM telemetry_sessions s
+        JOIN telemetry_messages m ON m.session_id = s.id
             AND m.active = 1
             AND coalesce(m.compacted, 0) = 0
             AND coalesce(m.content, '') != ''
@@ -164,7 +179,7 @@ def collect_sessions_and_messages(home: Path, max_content_chars: int) -> tuple[d
     last_activity = cur.execute(
         """
         SELECT max(timestamp)
-        FROM messages
+        FROM telemetry_messages
         WHERE active = 1 AND coalesce(compacted, 0) = 0 AND coalesce(content, '') != ''
         """
     ).fetchone()[0]
@@ -181,8 +196,8 @@ def collect_sessions_and_messages(home: Path, max_content_chars: int) -> tuple[d
                 "title": redact(row["title"] or "Untitled session")[:180],
                 "source": row["source"],
                 "platform": row["source"],
-                "chatId": redact(row["chat_id"] or ""),
-                "chatType": row["chat_type"],
+                "chatId": redact((row["chat_id"] if 'chat_id' in row.keys() else '') or ''),
+                "chatType": row["chat_type"] if 'chat_type' in row.keys() else None,
                 "model": model_name,
                 "provider": provider,
                 "messageCount": row["visible_message_count"],
@@ -203,7 +218,7 @@ def collect_sessions_and_messages(home: Path, max_content_chars: int) -> tuple[d
         """
         SELECT id, session_id, role, content, tool_name, timestamp, token_count,
                platform_message_id, active, compacted
-        FROM messages
+        FROM telemetry_messages
         WHERE active = 1 AND coalesce(compacted, 0) = 0 AND coalesce(content, '') != ''
         ORDER BY timestamp ASC
         """
@@ -346,7 +361,10 @@ def _send_payload_once(payload: dict[str, Any], endpoint: str, api_key: str, bot
                 raise RuntimeError("Session ERP import not acknowledged")
         chunk = payload.get("payload", {}).get("sessions", {})
         batch = parsed.get("batch") if isinstance(parsed, dict) else None
-        if chunk.get("chunkIndex") == chunk.get("chunkCount") and isinstance(batch, dict) and batch.get("status") != "COMPLETE":
+        if chunk.get("chunkIndex") == chunk.get("chunkCount") and (
+            (isinstance(relay, dict) and relay.get("skipped"))
+            or (isinstance(batch, dict) and batch.get("status") != "COMPLETE")
+        ):
             raise RuntimeError("Final session batch is incomplete")
         return {"status": resp.status, "bytes": len(body), "response": parsed}
 
@@ -356,7 +374,7 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true", help="Build payload summary without POSTing.")
     parser.add_argument("--chunk-size", type=int, default=DEFAULT_CHUNK_SIZE, help="Messages per transport chunk.")
     parser.add_argument("--max-content-chars", type=int, default=DEFAULT_MAX_CONTENT_CHARS, help="Max chars per message content; 0 disables truncation.")
-    parser.add_argument("--timeout", type=int, default=60, help="HTTP timeout seconds per chunk.")
+    parser.add_argument("--timeout", type=int, default=180, help="HTTP timeout seconds per chunk (includes ERP relay acknowledgement).")
     args = parser.parse_args()
 
     home = hermes_home()

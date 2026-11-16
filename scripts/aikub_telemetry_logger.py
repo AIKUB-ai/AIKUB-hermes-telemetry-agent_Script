@@ -7,11 +7,12 @@ Goal:
   existing Hermes inventory into Aikub Telemetry.
 
 Required env per bot:
-  AIKUB_TELEMETRY_BASE_URL=https://aikubtelemetry-production.up.railway.app
-  AIKUB_TELEMETRY_BOTOPS_TOKEN=[REDACTED]
+  AIKUB_TELEMETRY_URL=https://aikubtelemetry-production.up.railway.app
+  AIKUB_TELEMETRY_API_KEY=[REDACTED]
 
 Optional compatibility env:
-  AIKUB_TELEMETRY_API_KEY=[REDACTED]  # legacy alias for AIKUB_TELEMETRY_BOTOPS_TOKEN
+  AIKUB_TELEMETRY_BASE_URL=https://aikubtelemetry-production.up.railway.app
+  AIKUB_TELEMETRY_BOTOPS_TOKEN=[REDACTED]  # legacy alias for AIKUB_TELEMETRY_API_KEY
   AIKUB_TELEMETRY_BOT_ID=<technical slug, e.g. chopchop>
   AIKUB_TELEMETRY_SOURCE=<runtime/source, e.g. hermes>
 
@@ -32,7 +33,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import platform
 import re
+import shutil
+import subprocess
 import sys
 import urllib.error
 import urllib.request
@@ -41,6 +45,9 @@ from pathlib import Path
 from typing import Any
 
 EVENT_PATH = "/v1/telemetry/events"
+OPENAI_ME_URL = "https://api.openai.com/v1/me"
+LOGGER_VERSION = "2026.11.16.1"
+EXPECTED_SCRIPT_VERSION = "2026.11.16.1"
 
 
 def require_env(name: str) -> str:
@@ -50,14 +57,27 @@ def require_env(name: str) -> str:
     return value.strip()
 
 
+def require_base_url() -> str:
+    value = optional_env("AIKUB_TELEMETRY_URL") or optional_env("AIKUB_TELEMETRY_BASE_URL")
+    if not value:
+        raise SystemExit("Missing required env: AIKUB_TELEMETRY_URL")
+    return value
+
+
 def hermes_home() -> Path:
     return Path(os.getenv("HERMES_HOME") or os.getenv("HERMES_REAL_HOME") or "~/.hermes").expanduser()
+
+
+def openclaw_home() -> Path:
+    return Path(os.getenv("OPENCLAW_HOME") or "~/.openclaw").expanduser()
 
 
 def detect_runtime(home: Path) -> str:
     """Detect the local agent runtime without requiring an env var."""
     if (home / "config.yaml").exists() or (home / "hermes-agent").exists():
         return "hermes"
+    if openclaw_home().exists():
+        return "openclaw"
     return "unknown"
 
 
@@ -102,6 +122,138 @@ def read_model(home: Path) -> dict[str, Any]:
     return model
 
 
+def _json_key(data: Any, key: str) -> str:
+    if isinstance(data, dict):
+        value = data.get(key)
+        return value if isinstance(value, str) and value.strip() else ""
+    return ""
+
+
+def _find_access_token(data: Any) -> str:
+    if isinstance(data, dict):
+        token = _json_key(data, "access_token")
+        if token:
+            return token
+        for value in data.values():
+            token = _find_access_token(value)
+            if token:
+                return token
+    elif isinstance(data, list):
+        for value in data:
+            token = _find_access_token(value)
+            if token:
+                return token
+    return ""
+
+
+def _find_first_string(data: Any, keys: set[str]) -> str:
+    if isinstance(data, dict):
+        for key in keys:
+            value = data.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        for value in data.values():
+            found = _find_first_string(value, keys)
+            if found:
+                return found
+    elif isinstance(data, list):
+        for value in data:
+            found = _find_first_string(value, keys)
+            if found:
+                return found
+    return ""
+
+
+def codex_auth_candidates(home: Path) -> list[Path]:
+    candidates = [
+        home / "auth.json",
+        home / ".codex" / "auth.json",
+        home / "codex-home" / "auth.json",
+        home / "hermes-agent" / ".codex" / "auth.json",
+        home / "hermes-agent" / "codex-home" / "auth.json",
+        Path(os.getenv("CODEX_HOME", "")).expanduser() / "auth.json" if os.getenv("CODEX_HOME") else None,
+        Path("~/.codex/auth.json").expanduser(),
+        openclaw_home() / "agents" / "main" / "agent" / "codex-home" / "auth.json",
+    ]
+    for path in openclaw_home().glob("agents/*/agent/codex-home/auth.json"):
+        candidates.append(path)
+
+    seen: set[str] = set()
+    unique: list[Path] = []
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        key = str(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(candidate)
+    return unique
+
+
+def read_codex_oauth_account(home: Path) -> dict[str, Any] | None:
+    """Read Codex auth locally and keep only non-secret account identity fields."""
+    for auth_file in codex_auth_candidates(home):
+        account = read_codex_oauth_account_from_file(auth_file)
+        if account:
+            return account
+    return None
+
+
+def codex_oauth_account_from_auth_data(auth_data: Any) -> dict[str, Any] | None:
+    email = _find_first_string(auth_data, {"email", "account_email", "login_email"})
+    name = _find_first_string(auth_data, {"name", "display_name", "account_name"})
+    user_id = _find_first_string(auth_data, {"user_id", "account_id", "id"})
+    if not any([email, name, user_id]):
+        return None
+    return {
+        "provider": "openai-codex",
+        "email": email or None,
+        "name": name or None,
+        "userId": user_id or None,
+    }
+
+
+def read_codex_oauth_account_from_file(auth_file: Path) -> dict[str, Any] | None:
+    if not auth_file.exists():
+        return None
+    try:
+        auth_data = json.loads(auth_file.read_text(encoding="utf-8", errors="replace"))
+    except Exception:
+        return None
+
+    embedded_account = codex_oauth_account_from_auth_data(auth_data)
+    if embedded_account and embedded_account.get("email"):
+        return embedded_account
+
+    access_token = _find_access_token(auth_data)
+    if not access_token:
+        return embedded_account
+
+    try:
+        request = urllib.request.Request(
+            optional_env("AIKUB_TELEMETRY_OPENAI_ME_URL", OPENAI_ME_URL),
+            method="GET",
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        with urllib.request.urlopen(request, timeout=20) as response:
+            data = json.loads(response.read().decode("utf-8", errors="replace"))
+    except Exception:
+        return None
+
+    email = _json_key(data, "email")
+    name = _json_key(data, "name")
+    user_id = _json_key(data, "id")
+    if not any([email, name, user_id]):
+        return embedded_account
+    return {
+        "provider": "openai-codex",
+        "email": email or None,
+        "name": name or None,
+        "userId": user_id or None,
+    }
+
+
 def parse_skill_md(path: Path) -> dict[str, Any]:
     """Extract lightweight skill metadata without executing anything."""
     text = path.read_text(encoding="utf-8", errors="replace")
@@ -125,22 +277,193 @@ def parse_skill_md(path: Path) -> dict[str, Any]:
                 description = line[:240]
                 break
 
-    return {"name": name, "description": description, "path": str(path)}
+    return {
+        "name": name,
+        "description": description,
+        "path": str(path),
+        "installed": True,
+        "enabled": True,
+        "readinessStatus": "available",
+        "reason": None,
+        "requiredPlatforms": [],
+        "currentPlatform": current_platform(),
+        "missingCommands": [],
+        "prerequisitesSatisfied": True,
+        "compatibleWithPlatform": True,
+        "usableByHermes": True,
+    }
+
+
+def current_platform() -> str:
+    system = platform.system().lower()
+    if system == "darwin":
+        return "macos"
+    if system.startswith("linux"):
+        return "linux"
+    if system.startswith(("windows", "mingw", "msys", "cygwin")):
+        return "windows"
+    return system or "unknown"
+
+
+def normalize_required_platform(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if text in {"darwin", "mac", "macos", "osx"}:
+        return "macos"
+    if text.startswith("linux"):
+        return "linux"
+    if text.startswith(("win", "windows")):
+        return "windows"
+    return text
+
+
+def missing_values(missing: Any, key: str) -> list[str]:
+    if not isinstance(missing, dict):
+        return []
+    values = missing.get(key)
+    if not isinstance(values, list):
+        return []
+    return [str(value) for value in values if str(value)]
+
+
+def readiness_from_openclaw_skill(item: dict[str, Any]) -> tuple[str, str | None]:
+    missing = item.get("missing") if isinstance(item.get("missing"), dict) else {}
+    required_platforms = [normalize_required_platform(value) for value in missing_values(missing, "os")]
+    missing_commands = missing_values(missing, "bins")
+    missing_any_commands = missing_values(missing, "anyBins")
+    missing_env = missing_values(missing, "env")
+    missing_config = missing_values(missing, "config")
+    platform_mismatch = bool(required_platforms and current_platform() not in required_platforms)
+    missing_prereqs = bool(missing_commands or missing_any_commands or missing_env or missing_config)
+
+    if platform_mismatch:
+        return "unsupported", "platform_mismatch"
+    if missing_prereqs:
+        return "blocked", "missing_prerequisites"
+    if item.get("disabled") is True:
+        return "disabled", "disabled"
+    if item.get("eligible") is False:
+        return "disabled", "not_eligible"
+    return "active", None
+
+
+def normalize_openclaw_skill(item: dict[str, Any]) -> dict[str, Any]:
+    missing = item.get("missing") if isinstance(item.get("missing"), dict) else {}
+    required_platforms = [normalize_required_platform(value) for value in missing_values(missing, "os")]
+    missing_commands = [*missing_values(missing, "bins"), *missing_values(missing, "anyBins")]
+    readiness_status, reason = readiness_from_openclaw_skill(item)
+    compatible = not required_platforms or current_platform() in required_platforms
+    prerequisites_satisfied = not any(
+        [
+            missing_commands,
+            missing_values(missing, "env"),
+            missing_values(missing, "config"),
+        ]
+    )
+    usable = bool(item.get("eligible") and not item.get("disabled") and item.get("modelVisible") and compatible and prerequisites_satisfied)
+    return {
+        "name": item.get("name", ""),
+        "description": item.get("description", ""),
+        "category": "openclaw",
+        "source": item.get("source", "openclaw"),
+        "installed": True,
+        "enabled": bool(not item.get("disabled") and item.get("eligible")),
+        "readinessStatus": readiness_status,
+        "reason": reason,
+        "requiredPlatforms": required_platforms,
+        "currentPlatform": current_platform(),
+        "missingCommands": missing_commands,
+        "prerequisitesSatisfied": prerequisites_satisfied,
+        "compatibleWithPlatform": compatible,
+        "usableByHermes": usable,
+        "eligible": item.get("eligible"),
+        "modelVisible": item.get("modelVisible"),
+        "userInvocable": item.get("userInvocable"),
+        "commandVisible": item.get("commandVisible"),
+    }
+
+
+def unique_existing_paths(paths: list[Path]) -> list[Path]:
+    seen: set[str] = set()
+    existing: list[Path] = []
+    for path in paths:
+        expanded = path.expanduser()
+        key = str(expanded)
+        if key in seen or not expanded.exists():
+            continue
+        seen.add(key)
+        existing.append(expanded)
+    return existing
+
+
+def openclaw_bin() -> str | None:
+    if optional_env("AIKUB_TELEMETRY_DISABLE_OPENCLAW_CLI").lower() in {"1", "true", "yes"}:
+        return None
+    configured = optional_env("OPENCLAW_BIN")
+    candidates = [configured] if configured else []
+    candidates.extend([str(Path("~/.npm-global/bin/openclaw").expanduser()), "openclaw"])
+    for candidate in candidates:
+        if not candidate:
+            continue
+        if "/" in candidate and Path(candidate).exists():
+            return candidate
+        resolved = shutil.which(candidate)
+        if resolved:
+            return resolved
+    return None
+
+
+def run_openclaw_json(args: list[str], cwd: Path) -> dict[str, Any] | None:
+    binary = openclaw_bin()
+    if not binary:
+        return None
+    try:
+        output = subprocess.check_output(
+            [binary, *args],
+            cwd=str(cwd) if cwd.exists() else None,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=12,
+        )
+        data = json.loads(output)
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
+def discover_openclaw_skills(home: Path) -> list[dict[str, Any]]:
+    oc_home = openclaw_home()
+    data = run_openclaw_json(["skills", "list", "--json"], oc_home / "workspace")
+    raw_skills = data.get("skills", []) if data else []
+    skills: list[dict[str, Any]] = []
+    for item in raw_skills:
+        if not isinstance(item, dict):
+            continue
+        skills.append(normalize_openclaw_skill(item))
+    return sorted(skills, key=lambda item: (item.get("category", ""), item["name"]))
 
 
 def discover_skills(home: Path) -> list[dict[str, Any]]:
-    """Inventory installed SKILL.md files without importing/executing Hermes.
+    """Read modern Hermes/OpenClaw skill layouts without importing the agent.
 
-    This is a filesystem inventory, not a guarantee of runtime enablement:
-    runtime-only plugin registrations and disabled-skill filters are not executed.
-    Local skills take precedence over bundled skills with the same name.
+    Keep discovery passive: runtime helpers can initialize Hermes or mutate
+    sys.path, and are not safe inside a cron inventory reader.
     """
 
-    roots = [home / "skills", home / "hermes-agent" / "skills"]
-    by_name: dict[str, dict[str, Any]] = {}
+    cli_skills = discover_openclaw_skills(home)
+    by_name: dict[str, dict[str, Any]] = {skill["name"]: skill for skill in cli_skills if skill.get("name")}
+
+    oc_home = openclaw_home()
+    roots = unique_existing_paths(
+        [
+            home / "skills",
+            home / "hermes-agent" / "skills",
+            oc_home / "workspace" / "skills",
+            oc_home / "plugin-skills",
+            oc_home / "agents" / "main" / "agent" / "codex-home" / "skills",
+            *oc_home.glob("agents/*/agent/codex-home/skills"),
+        ]
+    )
     for root in roots:
-        if not root.exists():
-            continue
         for skill_file in root.rglob("SKILL.md"):
             if "optional-skills" in skill_file.parts:
                 continue
@@ -158,25 +481,68 @@ def discover_skills(home: Path) -> list[dict[str, Any]]:
     return sorted(by_name.values(), key=lambda item: (item.get("category", ""), item["name"]))
 
 
-def discover_crons(home: Path) -> list[dict[str, Any]]:
-    """Read Hermes cron definitions and remove private/noisy fields.
-
-    We intentionally do not log prompt text, delivery origin/chat metadata,
-    fire claims, or delivery errors. This is an inventory, not a transcript.
-    """
-    jobs_file = home / "cron" / "jobs.json"
-    if not jobs_file.exists():
-        return []
+def read_cron_jobs_file(jobs_file: Path) -> list[dict[str, Any]]:
     try:
         data = json.loads(jobs_file.read_text(encoding="utf-8", errors="replace"))
     except Exception:
         return []
 
     jobs = data.get("jobs", []) if isinstance(data, dict) else []
+    return [job for job in jobs if isinstance(job, dict)]
+
+
+def nested_value(data: dict[str, Any], *keys: str) -> Any:
+    current: Any = data
+    for key in keys:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    return current
+
+
+def discover_openclaw_crons(home: Path) -> list[dict[str, Any]]:
+    oc_home = openclaw_home()
+    data = run_openclaw_json(["cron", "list", "--all", "--json", "--timeout", "8000"], oc_home / "workspace")
+    raw_jobs = data.get("jobs", []) if data else []
+    return [job for job in raw_jobs if isinstance(job, dict)]
+
+
+def discover_crons(home: Path) -> list[dict[str, Any]]:
+    """Read Hermes/OpenClaw cron definitions and remove private/noisy fields.
+
+    We intentionally do not log prompt text, delivery origin/chat metadata,
+    fire claims, or delivery errors. This is an inventory, not a transcript.
+    """
+    oc_home = openclaw_home()
+    jobs_files = unique_existing_paths(
+        [
+            home / "cron" / "jobs.json",
+            oc_home / "cron" / "jobs.json",
+            oc_home / "cron" / "jobs.json.migrated",
+            oc_home / "cron" / "jobs.json.bak",
+        ]
+    )
+    jobs: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for job in discover_openclaw_crons(home):
+        job_id = str(job.get("id") or "")
+        if job_id and job_id in seen_ids:
+            continue
+        if job_id:
+            seen_ids.add(job_id)
+        jobs.append(job)
+
+    for jobs_file in jobs_files:
+        for job in read_cron_jobs_file(jobs_file):
+            job_id = str(job.get("id") or "")
+            if job_id and job_id in seen_ids:
+                continue
+            if job_id:
+                seen_ids.add(job_id)
+            jobs.append(job)
+
     safe_jobs: list[dict[str, Any]] = []
     for job in jobs:
-        if not isinstance(job, dict):
-            continue
         schedule = job.get("schedule") if isinstance(job.get("schedule"), dict) else {}
         repeat = job.get("repeat") if isinstance(job.get("repeat"), dict) else {}
         safe_jobs.append(
@@ -188,6 +554,8 @@ def discover_crons(home: Path) -> list[dict[str, Any]]:
                 "schedule": {
                     "kind": schedule.get("kind"),
                     "display": job.get("schedule_display") or schedule.get("display") or schedule.get("expr"),
+                    "expr": schedule.get("expr"),
+                    "tz": schedule.get("tz"),
                 },
                 "repeat": {
                     "times": repeat.get("times"),
@@ -200,10 +568,11 @@ def discover_crons(home: Path) -> list[dict[str, Any]]:
                 "skills": job.get("skills") or ([] if not job.get("skill") else [job.get("skill")]),
                 "model": job.get("model") or job.get("model_snapshot"),
                 "provider": job.get("provider") or job.get("provider_snapshot"),
-                "createdAt": job.get("created_at"),
-                "nextRunAt": job.get("next_run_at"),
-                "lastRunAt": job.get("last_run_at"),
-                "lastStatus": job.get("last_status"),
+                "createdAt": job.get("created_at") or job.get("createdAt") or job.get("createdAtMs"),
+                "updatedAt": job.get("updated_at") or job.get("updatedAt") or job.get("updatedAtMs"),
+                "nextRunAt": job.get("next_run_at") or job.get("nextRunAt") or job.get("nextRunAtMs") or nested_value(job, "state", "nextRunAtMs"),
+                "lastRunAt": job.get("last_run_at") or job.get("lastRunAt") or job.get("lastRunAtMs") or nested_value(job, "state", "lastRunAtMs"),
+                "lastStatus": job.get("last_status") or job.get("lastStatus") or job.get("status") or nested_value(job, "state", "lastStatus"),
             }
         )
     return safe_jobs
@@ -271,12 +640,28 @@ def optional_env(name: str, default: str = "") -> str:
 
 
 def require_token() -> str:
-    """Return the bot telemetry token. Prefer the explicit BotOps token env name; keep the
-    old API_KEY name as a compatibility alias for already-installed bots."""
+    """Return the bot telemetry token. Prefer the env var shown in BotOps Vault."""
     token = optional_env("AIKUB_TELEMETRY_BOTOPS_TOKEN") or optional_env("AIKUB_TELEMETRY_API_KEY")
     if not token:
-        raise SystemExit("Missing required env: AIKUB_TELEMETRY_BOTOPS_TOKEN")
+        raise SystemExit("Missing required env: AIKUB_TELEMETRY_API_KEY")
     return token
+
+
+def telemetry_script_metadata() -> dict[str, Any]:
+    runner_version = optional_env("AIKUB_TELEMETRY_RUNNER_VERSION")
+    expected_version = optional_env("AIKUB_TELEMETRY_SCRIPT_EXPECTED_VERSION", EXPECTED_SCRIPT_VERSION)
+    version = runner_version or LOGGER_VERSION
+    return {
+        "name": "aikub-telemetry-agent",
+        "version": version,
+        "runnerVersion": runner_version or None,
+        "loggerVersion": LOGGER_VERSION,
+        "expectedVersion": expected_version,
+        "upToDate": bool(version and expected_version and version == expected_version),
+        "selfUpdating": True,
+        "installDir": "aikub_telemetry_agent",
+        "expectedCronExpression": "0 */2 * * *",
+    }
 
 
 def build_payload(bot_id: str, home: Path) -> dict[str, Any]:
@@ -287,6 +672,8 @@ def build_payload(bot_id: str, home: Path) -> dict[str, Any]:
     plugins = discover_plugins(home)
     # File inventory intentionally disabled: too heavy for ERP/BotOps hourly telemetry.
     model = read_model(home)
+    oauth_account = read_codex_oauth_account(home)
+    telemetry_script = telemetry_script_metadata()
     occurred_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     session_id = f"bot-inventory-{bot_id}-{occurred_at}"
 
@@ -313,6 +700,9 @@ def build_payload(bot_id: str, home: Path) -> dict[str, Any]:
                 "name": model.get("name"),
                 "context": model.get("contextLength"),
             },
+            "oauthAccount": oauth_account,
+            "telemetryScriptVersion": telemetry_script["version"],
+            "telemetryScript": telemetry_script,
             "skillCount": len(skills),
             "skills": skills,
             "crons": {
@@ -321,6 +711,12 @@ def build_payload(bot_id: str, home: Path) -> dict[str, Any]:
                 "items": crons,
             },
             "plugins": plugins,
+            "inventoryDiscovery": {
+                "runtime": runtime,
+                "hermesHome": str(home),
+                "openclawHome": str(openclaw_home()),
+                "usedOpenClawCli": openclaw_bin() is not None,
+            },
         },
     }
 
@@ -380,7 +776,7 @@ def main() -> int:
     api_key = require_token()
     configured_bot_id = optional_env("AIKUB_TELEMETRY_BOT_ID")
     bot_id = configured_bot_id or "unknown"
-    endpoint = build_endpoint(require_env("AIKUB_TELEMETRY_BASE_URL"))
+    endpoint = build_endpoint(require_base_url())
     home = hermes_home()
     payload = build_payload(bot_id, home)
     if not configured_bot_id:
@@ -391,7 +787,15 @@ def main() -> int:
         return 0
 
     result = post_event(endpoint, api_key, bot_id, payload)
-    print(json.dumps({"config": redacted_config(endpoint, bot_id, home), "result": result}, ensure_ascii=False, indent=2))
+    print(json.dumps({
+        "config": redacted_config(endpoint, bot_id, home),
+        "inventory": {
+            "skillCount": len(payload["payload"].get("skills", [])),
+            "cronCount": len(payload["payload"].get("crons", {}).get("items", [])),
+            "pluginCount": payload["payload"].get("plugins", {}).get("pluginCount", 0),
+        },
+        "result": result,
+    }, ensure_ascii=False, indent=2))
     return 0 if result.get("ok") else 1
 
 

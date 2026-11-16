@@ -48,7 +48,7 @@ Planification officielle : **cron Linux natif**, sans invocation d'agent/LLM. De
 ./run_telemetry.sh install-cron
 ```
 
-Cette commande installe de façon idempotente les deux entrées Linux : light à `0 */2 * * *`, sessions à `30 3 * * *` (fuseau horaire du cron système). Les runs de collecte et l'auto-update ne doivent pas créer ni modifier automatiquement les crons Hermes.
+Cette commande conserve les entrées existantes (horaires, commandes et verrous) sans les réécrire. Pour une nouvelle installation seulement, elle ajoute deux entrées Linux : light aux 2h et sessions une fois par jour à partir de 03:00, décalées par un slot stable dérivé du hostname et de `HERMES_HOME` (fuseau du cron système). Pour garantir un espacement entre bots, configurer des `AIKUB_TELEMETRY_CRON_SLOT` distincts (0..29) avec `AIKUB_TELEMETRY_CRON_STEP_MINUTES=3` ou `4` (défaut). Les runs de collecte et l'auto-update ne créent ni ne modifient aucun cron.
 
 **Migration :** les anciens crons Hermes de télémétrie doivent être désactivés explicitement par l'opérateur pour éviter les doublons avec Linux. L'installation ne les modifie pas; ne pas laisser les deux planifications actives.
 
@@ -87,7 +87,7 @@ Le script fait :
 
 Si la mise à jour échoue par auth/réseau, le runner signale l'échec sans montrer de credential et continue seulement si une copie locale exploitable est disponible; sinon il s'arrête proprement. Il ne doit pas prétendre être à jour après cet échec. L'auto-update ne remplace pas l'installation explicite des crons via `install-cron`.
 
-### Cron sessions, 1x/jour à 03:30
+### Cron sessions, 1x/jour (horaire existant conservé)
 
 Le cron sessions envoie seulement `bot_sessions_snapshot` depuis `~/.hermes/state.db`. Il ne doit pas envoyer l'inventaire ni les logs.
 

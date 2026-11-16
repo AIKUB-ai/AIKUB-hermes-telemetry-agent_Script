@@ -52,6 +52,10 @@ export AIKUB_LOG_TIMEZONE="${AIKUB_LOG_TIMEZONE:-$(env_value AIKUB_LOG_TIMEZONE)
 export HERMES_HOME="${HERMES_HOME:-$(env_value HERMES_HOME)}"
 export HERMES_REAL_HOME="${HERMES_REAL_HOME:-$(env_value HERMES_REAL_HOME)}"
 export OPENCLAW_HOME="${OPENCLAW_HOME:-$(env_value OPENCLAW_HOME)}"
+export CODEX_HOME="${CODEX_HOME:-$(env_value CODEX_HOME)}"
+export AIKUB_TELEMETRY_CRON_SLOT="${AIKUB_TELEMETRY_CRON_SLOT:-$(env_value AIKUB_TELEMETRY_CRON_SLOT)}"
+export AIKUB_TELEMETRY_CRON_SEED="${AIKUB_TELEMETRY_CRON_SEED:-$(env_value AIKUB_TELEMETRY_CRON_SEED)}"
+export AIKUB_TELEMETRY_CRON_STEP_MINUTES="${AIKUB_TELEMETRY_CRON_STEP_MINUTES:-$(env_value AIKUB_TELEMETRY_CRON_STEP_MINUTES)}"
 HERMES_HOME="${HERMES_HOME:-${HERMES_REAL_HOME:-$HOME/.hermes}}"
 export HERMES_HOME
 
@@ -78,9 +82,7 @@ self_update() {
 ensure_local_cron_lock() {
   local mark_start="# AIKUB_TELEMETRY_AGENT_START"
   local mark_end="# AIKUB_TELEMETRY_AGENT_END"
-  local light_line="0 */2 * * * flock -n $INSTALL_DIR/run.lock $INSTALL_DIR/run_telemetry.sh light >> $INSTALL_DIR/logs/cron.log 2>&1"
-  local sessions_line="30 3 * * * flock -n $INSTALL_DIR/sessions.lock $INSTALL_DIR/run_telemetry.sh sessions >> $INSTALL_DIR/logs/cron.log 2>&1"
-  local current filtered
+  local current seed slot step offset minute hour light_line sessions_line
 
   if ! command -v crontab >/dev/null 2>&1 || ! command -v flock >/dev/null 2>&1; then
     echo "WARN: crontab/flock missing; Linux scheduling not installed" >&2
@@ -89,20 +91,32 @@ ensure_local_cron_lock() {
   fi
 
   current="$(crontab -l 2>/dev/null || true)"
-  if printf "%s\n" "$current" | grep -Fq "$light_line" && printf "%s\n" "$current" | grep -Fq "$sessions_line"; then
+  # Installed schedules, commands and locks are authoritative, including legacy
+  # implicit full runs. Reinstallation/update must not silently change their mode.
+  if printf '%s\n' "$current" | grep -v '^[[:space:]]*#' | grep -F -e "$INSTALL_DIR/run_telemetry.sh" -e "$INSTALL_DIR/scripts/aikub_telemetry_sessions_snapshot.py" >/dev/null; then
     return 0
   fi
-
-  filtered="$({
-    printf "%s\n" "$current" \
-      | sed "/$mark_start/,/$mark_end/d" \
-      | grep -vF "$INSTALL_DIR/run_telemetry.sh" \
-      | grep -vF "$INSTALL_DIR/scripts/aikub_telemetry_sessions_snapshot.py" \
-      || true
-  } )"
+  seed="${AIKUB_TELEMETRY_CRON_SEED:-$(env_value AIKUB_TELEMETRY_CRON_SEED)}"
+  seed="${seed:-${HOSTNAME:-$(hostname)}:${HERMES_HOME:-$INSTALL_DIR}}"
+  slot="${AIKUB_TELEMETRY_CRON_SLOT:-$(env_value AIKUB_TELEMETRY_CRON_SLOT)}"
+  step="${AIKUB_TELEMETRY_CRON_STEP_MINUTES:-$(env_value AIKUB_TELEMETRY_CRON_STEP_MINUTES)}"
+  step="${step:-4}"
+  if [ -z "$slot" ]; then
+    read -r slot _ < <(printf '%s' "$seed" | cksum)
+    slot=$((slot % 30))
+  fi
+  if ! [[ "$slot" =~ ^([0-9]|[12][0-9])$ ]] || ! [[ "$step" =~ ^[34]$ ]]; then
+    echo 'ERROR: cron slot must be 0..29 and step must be 3 or 4 minutes' >&2
+    return 1
+  fi
+  offset=$((10#$slot * step))
+  minute=$((offset % 60))
+  hour=$((offset / 60))
+  light_line="$minute $hour-23/2 * * * flock -n $INSTALL_DIR/run.lock $INSTALL_DIR/run_telemetry.sh light >> $INSTALL_DIR/logs/cron.log 2>&1"
+  sessions_line="$minute $((3 + hour)) * * * flock -n $INSTALL_DIR/sessions.lock $INSTALL_DIR/run_telemetry.sh sessions >> $INSTALL_DIR/logs/cron.log 2>&1"
 
   (
-    printf "%s\n" "$filtered" | sed '/^[[:space:]]*$/d'
+    printf '%s\n' "$current"
     echo "$mark_start"
     echo "$light_line"
     echo "$sessions_line"
@@ -156,8 +170,10 @@ case "$MODE" in
     run_sessions
     ;;
   all|--all)
-    run_light
-    run_sessions
+    status=0
+    run_light || status=1
+    run_sessions || status=1
+    exit "$status"
     ;;
   *)
     echo "Usage: $0 [light|sessions|all|install-cron]" >&2
