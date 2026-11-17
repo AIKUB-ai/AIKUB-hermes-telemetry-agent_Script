@@ -110,6 +110,34 @@ class IncrementalSessionsTests(unittest.TestCase):
             sessions.write_state(self.home, state)
             self.assertEqual(self.collect()[2], [])
 
+    def test_durable_queue_ack_advances_cursor_only_after_all_chunks(self):
+        self.add(1)
+        self.add(2)
+        sessions.write_state(self.home, {'lastMessageTimestamp': self.now - 1, 'messageIdsAtLastTimestamp': []})
+        previous = sessions.state_path(self.home).read_bytes()
+        queued = {'stored': True, 'delivery': {'durable': True, 'status': 'PENDING'},
+                  'erpImport': {'ok': True, 'queued': True, 'skipped': True}}
+        waiting = {'stored': True, 'delivery': {'durable': True, 'status': 'WAITING_CHUNKS'},
+                   'erpImport': {'ok': True, 'queued': True, 'skipped': True,
+                                 'reason': 'SESSION_BATCH_INCOMPLETE'}}
+
+        def reply(body):
+            response = Mock(status=202)
+            response.read.return_value = json.dumps(body).encode()
+            response.__enter__ = Mock(return_value=response)
+            response.__exit__ = Mock(return_value=False)
+            return response
+
+        # First chunk custody alone must never consume the final chunk's cursor.
+        for final_body in ({'stored': True}, waiting):
+            with self.subTest(final_body=final_body), patch.object(sessions.urllib.request, 'urlopen', side_effect=[reply(waiting)] + [reply(final_body)] * 4), patch.object(sessions.time, 'sleep'):
+                self.assertEqual(self.cli('--chunk-size', '1'), 1)
+            self.assertEqual(sessions.state_path(self.home).read_bytes(), previous)
+        with patch.object(sessions.urllib.request, 'urlopen', side_effect=[reply(waiting), reply(queued)]) as post:
+            self.assertEqual(self.cli('--chunk-size', '1'), 0)
+        self.assertEqual(post.call_count, 2)
+        self.assertEqual(self.collect()[2], [])
+
     def test_failed_final_ack_keeps_cursor_then_success_advances_it(self):
         self.add(1)
         sessions.write_state(self.home, {'lastMessageTimestamp': self.now - 1, 'messageIdsAtLastTimestamp': []})

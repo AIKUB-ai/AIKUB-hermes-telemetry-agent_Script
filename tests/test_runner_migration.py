@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 SPEC = importlib.util.spec_from_file_location("migration_logger", Path(__file__).resolve().parents[1] / "scripts/aikub_telemetry_logger.py")
 logger = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(logger)
-NEW = b'#!/usr/bin/env bash\nset -euo pipefail\nexport AIKUB_TELEMETRY_RUNNER_VERSION="2026.11.16.1"\n# AIKUB_TELEMETRY_SELF_UPDATED\nexit 0\n'
+NEW = b'#!/usr/bin/env bash\nset -euo pipefail\nexport AIKUB_TELEMETRY_RUNNER_VERSION="2026.11.17.1"\n# AIKUB_TELEMETRY_SELF_UPDATED\nexit 0\n'
 
 class RunnerMigrationTests(unittest.TestCase):
     def setUp(self):

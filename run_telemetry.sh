@@ -7,7 +7,7 @@
 
 set -euo pipefail
 
-export AIKUB_TELEMETRY_RUNNER_VERSION="2026.11.16.1"
+export AIKUB_TELEMETRY_RUNNER_VERSION="2026.11.17.1"
 SCRIPT_PATH="${BASH_SOURCE[0]}"
 INSTALL_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
 # Resolve HERMES_HOME only after reading explicit profile paths from .env.

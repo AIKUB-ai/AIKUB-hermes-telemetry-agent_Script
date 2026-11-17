@@ -66,7 +66,7 @@ class InventoryTests(unittest.TestCase):
             response = MagicMock()
             response.status = 200
             response.read.return_value = json.dumps(
-                [self.plugin] if request.get_method() == "GET" else {"accepted": True}
+                [self.plugin] if request.get_method() == "GET" else {"erpImport": {"ok": True}}
             ).encode()
             response.__enter__.return_value = response
             return response

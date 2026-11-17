@@ -494,8 +494,24 @@ def send_payload_once(payload: dict[str, Any], endpoint: str, api_key: str, bot_
             parsed = {"raw": raw[:500]}
         relay = parsed.get("erpImport") if isinstance(parsed, dict) else None
         chunk = payload.get("payload", {}).get("sessions", {})
+        index, count = chunk.get("chunkIndex"), chunk.get("chunkCount")
+        nonfinal = type(index) is int and type(count) is int and 1 <= index < count
+        delivery = parsed.get("delivery") if isinstance(parsed, dict) else None
+        if resp.status == 202 or (resp.status == 200 and isinstance(delivery, dict) and delivery.get("status") == "DELIVERED"):
+            # A durable queue owns retries; this does not claim ERP import.
+            accepted = (
+                isinstance(parsed, dict)
+                and parsed.get("stored") is True
+                and isinstance(delivery, dict)
+                and delivery.get("durable") is True
+                and (delivery.get("status") in ("PENDING", "DELIVERED")
+                     or (nonfinal and delivery.get("status") == "WAITING_CHUNKS"))
+            )
+            return {"ok": accepted, "status": resp.status, "bytes": len(body), "response": parsed}
         waiting = isinstance(relay, dict) and relay.get("skipped") and relay.get("reason") == "SESSION_BATCH_INCOMPLETE"
-        relay_ok = isinstance(relay, dict) and relay.get("ok") is True and (not relay.get("skipped") or waiting)
+        legacy = (isinstance(parsed, dict) and "delivery" not in parsed
+                  and ("stored" not in parsed or parsed["stored"] is True))
+        relay_ok = legacy and isinstance(relay, dict) and relay.get("ok") is True and (not relay.get("skipped") or waiting)
         batch = parsed.get("batch") if isinstance(parsed, dict) else None
         final = chunk.get("chunkIndex") == chunk.get("chunkCount")
         complete = not final or (not waiting and (not isinstance(batch, dict) or batch.get("status") == "COMPLETE"))

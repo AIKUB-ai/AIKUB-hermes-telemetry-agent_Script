@@ -46,8 +46,8 @@ from typing import Any
 
 EVENT_PATH = "/v1/telemetry/events"
 OPENAI_ME_URL = "https://api.openai.com/v1/me"
-LOGGER_VERSION = "2026.11.16.1"
-EXPECTED_SCRIPT_VERSION = "2026.11.16.1"
+LOGGER_VERSION = "2026.11.17.1"
+EXPECTED_SCRIPT_VERSION = "2026.11.17.1"
 
 
 def require_env(name: str) -> str:
@@ -735,9 +735,32 @@ def post_event(endpoint: str, api_key: str, bot_id: str, payload: dict[str, Any]
     try:
         with urllib.request.urlopen(request, timeout=120) as response:
             response_body = response.read().decode("utf-8", errors="replace")
-            parsed = json.loads(response_body) if response_body else None
+            try:
+                parsed = json.loads(response_body) if response_body else None
+            except json.JSONDecodeError:
+                parsed = {"raw": response_body[:500]}
             relay = parsed.get("erpImport") if isinstance(parsed, dict) else None
-            relay_ok = not isinstance(relay, dict) or (relay.get("ok") is True and not relay.get("skipped"))
+            delivery = parsed.get("delivery") if isinstance(parsed, dict) else None
+            # HTTP 202 acknowledges durable collector custody, never ERP import.
+            if response.status == 202 or (response.status == 200 and isinstance(delivery, dict) and delivery.get("status") == "DELIVERED"):
+                relay_ok = (
+                    isinstance(parsed, dict)
+                    and parsed.get("stored") is True
+                    and isinstance(delivery, dict)
+                    and delivery.get("durable") is True
+                    and delivery.get("status") in ("PENDING", "DELIVERED")
+                )
+            else:
+                # Legacy synchronous collectors must explicitly confirm ERP import;
+                # never downgrade an incomplete modern custody ACK to legacy success.
+                relay_ok = (
+                    isinstance(parsed, dict)
+                    and "delivery" not in parsed
+                    and ("stored" not in parsed or parsed["stored"] is True)
+                    and isinstance(relay, dict)
+                    and relay.get("ok") is True
+                    and not relay.get("skipped")
+                )
             return {
                 "ok": 200 <= response.status < 300 and relay_ok,
                 "status": response.status,
@@ -791,7 +814,7 @@ def upgrade_legacy_runner(base_url: str, install_dir: Path | None = None) -> boo
             return False
         with urllib.request.urlopen(base_url.rstrip("/") + "/agent/run_telemetry.sh", timeout=20) as response:
             updated = response.read(1024 * 1024 + 1)
-        if len(updated) > 1024 * 1024 or b"AIKUB_TELEMETRY_SELF_UPDATED" not in updated or b'AIKUB_TELEMETRY_RUNNER_VERSION="2026.11.16.1"' not in updated:
+        if len(updated) > 1024 * 1024 or b"AIKUB_TELEMETRY_SELF_UPDATED" not in updated or b'AIKUB_TELEMETRY_RUNNER_VERSION="2026.11.17.1"' not in updated:
             return False
         with tempfile.NamedTemporaryFile(dir=root, prefix=".run_telemetry.next.", delete=False) as handle:
             staging = Path(handle.name)
